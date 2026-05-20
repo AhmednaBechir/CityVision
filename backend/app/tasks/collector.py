@@ -1,10 +1,10 @@
 """
-Background scheduler — collects real-time data and stores snapshots in Postgres.
+Background scheduler — collects real-time data into Postgres every 60s.
 
 Jobs:
-  every 60s  → collect tram stop times and save StopTimeSnapshot rows
-  every 60s  → collect parking availability and save ParkingSnapshot rows
-  on startup → seed static data (lines, stops, parking locations)
+  collect_tram_stoptimes    — polls ficheHoraires, saves StopTimeSnapshot rows
+  collect_parking_snapshots — polls dyn/parking, saves ParkingSnapshot rows
+  on startup                — seeds static data
 """
 import logging
 from datetime import datetime, timedelta
@@ -18,7 +18,7 @@ from app.core.config import get_settings
 from app.services import mreso_client
 from app.services.tram_service import seed_lines, seed_stops
 from app.services.parking_service import seed_parking
-from app.models.models import StopTimeSnapshot, ParkingSnapshot, ParkingLocation, TramStop, TramLine
+from app.models.models import StopTimeSnapshot, ParkingSnapshot, ParkingLocation
 from sqlalchemy import text
 
 log = logging.getLogger(__name__)
@@ -26,77 +26,83 @@ settings = get_settings()
 scheduler = AsyncIOScheduler()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# TRAM COLLECTION
-# ─────────────────────────────────────────────────────────────────────────────
-
 async def collect_tram_stoptimes():
     """
-    For each tram stop in DB, hit the real-time stop-times endpoint
-    and persist delay data.
+    For each tram line, fetch schedule window and save StopTimeSnapshot rows
+    for any trip that is currently active (so we build delay history over time).
+    Since ficheHoraires gives scheduled times only (no real-time delay),
+    delay_seconds will be 0 unless we later get a real-time source.
     """
     async with AsyncSessionLocal() as db:
         try:
-            result = await db.execute(text("SELECT id, name FROM tram_stops LIMIT 200"))
-            stops = result.mappings().all()
-
             now = datetime.utcnow()
+            now_local = datetime.now()
+            now_secs = now_local.hour * 3600 + now_local.minute * 60 + now_local.second
             snapshots = []
 
-            for stop in stops:
-                times_data = await mreso_client.fetch_stop_times(stop["id"])
-                for route_info in times_data:
-                    # Each item may have multiple times
-                    route_id = route_info.get("pattern", {}).get("route", {}).get("id") or ""
-                    # Only track tram lines (SEM:A..E)
-                    if not any(f"SEM:{c}" in route_id for c in "ABCDE"):
+            for route_id in mreso_client.TRAM_ROUTE_IDS:
+                line_id = f"SEM_{route_id.split(':')[1]}"
+                schedule = await mreso_client.fetch_line_schedule(route_id)
+
+                for dir_key, direction in schedule.items():
+                    arrets = direction.get("arrets", [])
+                    if len(arrets) < 2:
                         continue
-                    line_id = f"SEM_{route_id.split(':')[-1]}" if ":" in route_id else None
+                    first_stop = arrets[0]
+                    last_stop  = arrets[-1]
+                    first_trips = first_stop.get("trips", [])
+                    last_trips  = last_stop.get("trips", [])
+                    n = min(len(first_trips), len(last_trips))
 
-                    for t in route_info.get("times", []):
-                        sched = t.get("scheduledDeparture")
-                        rt    = t.get("realtimeDeparture")
-                        is_rt = t.get("realtime", False)
-
-                        if sched is None:
+                    for i in range(n):
+                        try:
+                            dep = int(first_trips[i])
+                            arr = int(last_trips[i])
+                        except (TypeError, ValueError):
+                            continue
+                        if arr < dep:
+                            arr += 86400
+                        if not (dep <= now_secs <= arr):
                             continue
 
-                        # times are seconds-since-midnight
-                        base = now.replace(hour=0, minute=0, second=0, microsecond=0)
-                        sched_dt = base + timedelta(seconds=int(sched))
-                        rt_dt    = (base + timedelta(seconds=int(rt))) if rt else None
-                        delay    = (rt_dt - sched_dt).seconds if (rt_dt and sched_dt) else None
-                        # negative if early
-                        if delay and delay > 3600:
-                            delay = delay - 86400  # wrap around midnight
+                        # Walk through all stops for this trip
+                        for arret in arrets:
+                            stop_id = arret.get("stopId", "")
+                            trips_at_stop = arret.get("trips", [])
+                            if i >= len(trips_at_stop):
+                                continue
+                            try:
+                                sched_secs = int(trips_at_stop[i])
+                            except (TypeError, ValueError):
+                                continue
 
-                        snap = StopTimeSnapshot(
-                            line_id=line_id or route_id,
-                            stop_id=stop["id"],
-                            trip_id=t.get("tripId"),
-                            scheduled_departure=sched_dt,
-                            realtime_departure=rt_dt,
-                            delay_seconds=delay,
-                            is_realtime=bool(is_rt),
-                            collected_at=now,
-                        )
-                        snapshots.append(snap)
+                            base = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+                            sched_dt = base + timedelta(seconds=sched_secs)
+
+                            snap = StopTimeSnapshot(
+                                line_id=line_id,
+                                stop_id=stop_id,
+                                trip_id=f"{route_id}_{dir_key}_{i}",
+                                scheduled_departure=sched_dt,
+                                realtime_departure=None,
+                                delay_seconds=0,   # no real-time source
+                                is_realtime=False,
+                                collected_at=now,
+                            )
+                            snapshots.append(snap)
 
             db.add_all(snapshots)
             await db.commit()
-            log.info(f"Collected {len(snapshots)} tram stop-time snapshots")
+            log.info(f"collect_tram_stoptimes: saved {len(snapshots)} snapshots")
         except Exception as e:
             log.error(f"collect_tram_stoptimes error: {e}")
             await db.rollback()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PARKING COLLECTION
-# ─────────────────────────────────────────────────────────────────────────────
-
 async def collect_parking_snapshots():
     """
     Fetch live parking data and persist availability snapshots.
+    fetch_parking_dynamic() returns a dict {id: {nb_places_libres, ...}}.
     """
     async with AsyncSessionLocal() as db:
         try:
@@ -104,63 +110,51 @@ async def collect_parking_snapshots():
             now = datetime.utcnow()
             snapshots = []
 
-            for item in dynamic:
-                pid = str(item.get("id", item.get("ID_PARKING", "")))
-                if not pid:
+            # Load capacity info from DB
+            result = await db.execute(text("SELECT id, capacity FROM parking_locations"))
+            capacity_map = {r["id"]: r["capacity"] for r in result.mappings()}
+
+            for pid, dyn in dynamic.items():
+                if not isinstance(dyn, dict):
                     continue
 
-                available = item.get("dispo", item.get("DISPO", item.get("placesDisponibles")))
-                capacity_raw = item.get("capacite", item.get("CAPACITE", item.get("capacity")))
-                is_open = item.get("status", "OUVERT") in ("OUVERT", "OPEN", 1, "1")
+                available_raw = dyn.get("nb_places_libres")
+                if available_raw is None:
+                    continue  # no real-time data for this parking, skip
 
                 try:
-                    available = int(available) if available is not None else None
-                    capacity  = int(capacity_raw) if capacity_raw else None
-                except (ValueError, TypeError):
-                    available, capacity = None, None
+                    available = int(available_raw)
+                except (TypeError, ValueError):
+                    continue
 
-                occupied  = (capacity - available) if (capacity and available is not None) else None
-                occ_pct   = (occupied / capacity * 100) if (occupied is not None and capacity) else None
+                capacity = capacity_map.get(pid)
+                occupied = (capacity - available) if capacity else None
+                occ_pct  = round(occupied / capacity * 100, 2) if (occupied is not None and capacity) else None
 
                 # Upsert parking location if unknown
-                existing = await db.get(ParkingLocation, pid)
-                if not existing:
-                    lon = item.get("x", item.get("lon"))
-                    lat = item.get("y", item.get("lat"))
-                    if lon and lat:
-                        from app.services.parking_service import classify_zone
-                        loc = ParkingLocation(
-                            id=pid,
-                            name=item.get("nom", pid),
-                            lon=float(lon),
-                            lat=float(lat),
-                            capacity=capacity,
-                            type="PAR",
-                            zone=classify_zone(float(lon), float(lat)),
-                        )
+                if pid not in capacity_map:
+                    existing = await db.get(ParkingLocation, pid)
+                    if not existing:
+                        loc = ParkingLocation(id=pid, name=pid, lon=0, lat=0, type="parking")
                         db.add(loc)
 
                 snap = ParkingSnapshot(
                     parking_id=pid,
                     available=available,
                     occupied=occupied,
-                    occupancy_pct=round(occ_pct, 2) if occ_pct else None,
-                    is_open=is_open,
+                    occupancy_pct=occ_pct,
+                    is_open=True,
                     collected_at=now,
                 )
                 snapshots.append(snap)
 
             db.add_all(snapshots)
             await db.commit()
-            log.info(f"Collected {len(snapshots)} parking snapshots")
+            log.info(f"collect_parking_snapshots: saved {len(snapshots)} snapshots")
         except Exception as e:
             log.error(f"collect_parking_snapshots error: {e}")
             await db.rollback()
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SEED ON STARTUP
-# ─────────────────────────────────────────────────────────────────────────────
 
 async def run_seed():
     async with AsyncSessionLocal() as db:
@@ -176,7 +170,7 @@ async def run_seed():
 
 def start_scheduler():
     interval = settings.COLLECT_INTERVAL_SECONDS
-    scheduler.add_job(collect_tram_stoptimes, IntervalTrigger(seconds=interval), id="tram_collect")
+    scheduler.add_job(collect_tram_stoptimes,    IntervalTrigger(seconds=interval), id="tram_collect")
     scheduler.add_job(collect_parking_snapshots, IntervalTrigger(seconds=interval), id="parking_collect")
     scheduler.start()
     log.info(f"Scheduler started — collecting every {interval}s")

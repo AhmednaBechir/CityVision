@@ -142,7 +142,10 @@ async def get_tram_positions(db: AsyncSession) -> list[dict]:
     lines = result.mappings().all()
 
     positions = []
-    now = datetime.now()
+    # Use UTC+2 (Europe/Paris CEST) to match ficheHoraires schedule times
+    from datetime import timezone, timedelta
+    now_utc = datetime.now(timezone.utc)
+    now = (now_utc + timedelta(hours=2)).replace(tzinfo=None)
 
     for line in lines:
         if not line["geometry"]:
@@ -188,7 +191,7 @@ def _find_active_trips_from_schedule(schedule: dict, now: datetime) -> list[dict
     Progress = (now - first_dep) / (last_dep - first_dep)
     """
     trips = []
-    now_secs = now.hour * 3600 + now.minute * 60 + now.second
+    now_secs = now.hour * 3600 + now.minute * 60 + now.second  # now is already UTC+2
 
     for dir_key, direction in schedule.items():
         arrets = direction.get("arrets", [])
@@ -208,10 +211,10 @@ def _find_active_trips_from_schedule(schedule: dict, now: datetime) -> list[dict
         dest = last_stop.get("stopName") or last_stop.get("name", "")
 
         for i in range(n_trips):
-            dep_secs = first_trips[i]
-            arr_secs = last_trips[i]
-
-            if dep_secs is None or arr_secs is None:
+            try:
+                dep_secs = int(first_trips[i])
+                arr_secs = int(last_trips[i])
+            except (TypeError, ValueError):
                 continue
 
             # Handle trips past midnight
@@ -228,9 +231,12 @@ def _find_active_trips_from_schedule(schedule: dict, now: datetime) -> list[dict
                 next_stop_name = None
                 for arret in arrets:
                     t = arret.get("trips", [])
-                    if i < len(t) and t[i] is not None and t[i] > now_secs:
-                        next_stop_name = arret.get("stopName") or arret.get("name")
-                        break
+                    try:
+                        if i < len(t) and t[i] is not None and int(t[i]) > now_secs:
+                            next_stop_name = arret.get("stopName") or arret.get("name")
+                            break
+                    except (TypeError, ValueError):
+                        continue
 
                 trips.append({
                     "trip_id":    f"{dir_key}_{i}",
