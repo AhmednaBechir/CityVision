@@ -41,6 +41,10 @@ export default function TransportMap({ showParking }) {
     map.addControl(new maplibregl.NavigationControl(), 'top-right')
 
     map.once('load', () => {
+      // Fix: container may have been 0×0 when the map was constructed
+      // (flex layout not yet painted). Force a resize now that the DOM has settled.
+      map.resize()
+
       // Add sources
       map.addSource('lines',   { type: 'geojson', data: empty() })
       map.addSource('stops',   { type: 'geojson', data: empty() })
@@ -97,18 +101,35 @@ export default function TransportMap({ showParking }) {
       if (s.pendingPositions) applyPositions(s, s.pendingPositions)
     })
 
+    // ResizeObserver: re-sync MapLibre whenever the container changes size.
+    // This covers the initial flex-layout paint AND any later panel opens/closes.
+    const ro = new ResizeObserver(() => { if (s.map) s.map.resize() })
+    ro.observe(containerRef.current)
+
     // Animation loop
+    // MapLibre 4.x stops repainting when idle (cooperative rendering). Without an
+    // explicit triggerRepaint(), marker DOM positions are never flushed to screen
+    // until something else (zoom, pan) forces a redraw — hence markers invisible
+    // at rest but appearing on zoom. triggerRepaint() schedules one canvas frame.
     const loop = (ts) => {
       s.rafId = requestAnimationFrame(loop)
-      Object.values(s.markers).forEach(m => {
+      const active = Object.values(s.markers)
+      if (!active.length) return
+      active.forEach(m => {
         const t = Math.min((ts - m.startTime) / POLL_MS, 1)
-        m.marker.setLngLat([lerp(m.from.lon, m.to.lon, t), lerp(m.from.lat, m.to.lat, t)])
-        if (m.el) m.el.style.transform = `rotate(${lerpAngle(m.from.heading, m.to.heading, t)}deg)`
+        const lon = lerp(m.from.lon, m.to.lon, t)
+        const lat = lerp(m.from.lat, m.to.lat, t)
+        const heading = lerpAngle(m.from.heading, m.to.heading, t)
+        // MapLibre 4.x doesn't reproject marker DOM elements when map is idle.
+        // Bypass setLngLat entirely — project lon/lat ourselves and write translate directly.
+        const { x, y } = s.map.project([lon, lat])
+        if (m.el) m.el.style.transform = `translate(${x - 14}px, ${y - 14}px) rotate(${heading}deg)`
       })
     }
     s.rafId = requestAnimationFrame(loop)
 
     return () => {
+      ro.disconnect()
       cancelAnimationFrame(s.rafId)
       Object.values(s.markers).forEach(m => m.marker.remove())
       map.remove()
