@@ -92,6 +92,16 @@ export default function TransportMap({ showParking }) {
         useTransportStore.getState().setSelectedParking(e.features[0].properties)
       })
 
+      // Parking
+      const parkingVisibility = showParking ? 'visible' : 'none'
+      s.map.setLayoutProperty('parking', 'visibility', parkingVisibility)
+      s.map.setLayoutProperty('parking-labels', 'visibility', parkingVisibility)
+
+      // Lines
+      const linesVisibility = showParking ? 'none' : 'visible'
+      s.map.setLayoutProperty('lines', 'visibility', linesVisibility)
+      s.map.setLayoutProperty('stops', 'visibility', linesVisibility)
+
       s.ready = true
 
       // Flush any data that arrived before map was ready
@@ -163,6 +173,21 @@ export default function TransportMap({ showParking }) {
     else s.pendingPositions = tramPositions
   }, [tramPositions])
 
+  useEffect(() => {
+    const s = stateRef.current
+    if (!s.ready) return
+
+    // Parking
+    const parkingVisibility = showParking ? 'visible' : 'none'
+    s.map.setLayoutProperty('parking', 'visibility', parkingVisibility)
+    s.map.setLayoutProperty('parking-labels', 'visibility', parkingVisibility)
+
+    // Lines
+    const linesVisibility = showParking ? 'none' : 'visible'
+    s.map.setLayoutProperty('lines', 'visibility', linesVisibility)
+    s.map.setLayoutProperty('stops', 'visibility', linesVisibility)
+  }, [showParking])
+
   return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
 }
 
@@ -193,7 +218,6 @@ function applyStops(s, stops) {
 }
 
 function applyParking(s, parking, show) {
-  if (!show) { s.map.getSource('parking')?.setData(empty()); return }
   s.map.getSource('parking')?.setData({
     type: 'FeatureCollection',
     features: parking.filter(p => p.lat && p.lon).map(p => {
