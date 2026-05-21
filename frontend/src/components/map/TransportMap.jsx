@@ -316,8 +316,8 @@ function applyParking(map, parking, show) {
     features: parking
       .filter(p => p.lat && p.lon)
       .map(p => {
-        const pct = p.occupancy_pct ?? 0
-        const color = pct >= 85 ? '#ef4444' : pct >= 60 ? '#f97316' : '#22c55e'
+        const pct = p.occupancy_pct ?? -1
+        const color = pct >= 85 ? '#ef4444' : pct >= 60 ? '#f97316' : pct >= 0 ? '#22c55e' : '#888888'
         return {
           type: 'Feature',
           properties: {
