@@ -24,7 +24,7 @@ Trip N departs stop[0] at trips[0][N] seconds, stop[1] at trips[1][N] seconds, e
 import json
 import math
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from typing import Any
 
 from sqlalchemy import text
@@ -40,6 +40,54 @@ log = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 # SEEDING
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _sort_multilinestring_segments(segments: list) -> list:
+    """
+    Sort MultiLineString segments so they form a continuous path.
+    Line D has two segments that share a start point but go in opposite directions.
+    We detect the direction by checking which end of seg0 is closest to an end of seg1,
+    then reorder/reverse segments so they chain end-to-start.
+    Returns a flat list of coordinates (LineString).
+    """
+    if len(segments) <= 1:
+        return segments[0] if segments else []
+
+    # Try all combinations: seg0 forward/reversed -> seg1 forward/reversed
+    # Pick the arrangement that minimises the gap between seg[i] end and seg[i+1] start
+    def dist(a, b):
+        return math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2)
+
+    def try_chain(segs):
+        """Try to chain segments greedily: for each seg pick the next unvisited
+        segment whose start or end is closest to the current endpoint."""
+        remaining = list(enumerate(segs))
+        result = list(segs[0])
+        used = {0}
+        current_end = result[-1]
+
+        while len(used) < len(segs):
+            best_idx, best_seg, best_reversed, best_d = None, None, False, float('inf')
+            for i, seg in remaining:
+                if i in used:
+                    continue
+                d_fwd = dist(current_end, seg[0])
+                d_rev = dist(current_end, seg[-1])
+                if d_fwd < best_d:
+                    best_d, best_idx, best_seg, best_reversed = d_fwd, i, seg, False
+                if d_rev < best_d:
+                    best_d, best_idx, best_seg, best_reversed = d_rev, i, seg, True
+            if best_idx is None:
+                break
+            used.add(best_idx)
+            seg_to_add = list(reversed(best_seg)) if best_reversed else list(best_seg)
+            # Skip duplicate junction point
+            result.extend(seg_to_add[1:])
+            current_end = result[-1]
+
+        return result
+
+    return try_chain(segments)
+
 
 async def seed_lines(db: AsyncSession) -> None:
     routes = await mreso_client.fetch_all_routes()
@@ -63,9 +111,16 @@ async def seed_lines(db: AsyncSession) -> None:
                     total_dist = _haversine_path(geom["coordinates"])
                     break
                 elif geom.get("type") == "MultiLineString":
-                    all_coords = [c for part in geom["coordinates"] for c in part]
-                    geometry = {"type": "LineString", "coordinates": all_coords}
-                    total_dist = _haversine_path(all_coords)
+                    # Keep as MultiLineString — frontend renders it natively.
+                    # Also store a sorted flat LineString for position interpolation.
+                    flat_coords = _sort_multilinestring_segments(geom["coordinates"])
+                    geometry = {
+                        "type": "MultiLineString",
+                        "coordinates": geom["coordinates"],
+                        # Extra field used by position interpolation
+                        "_flat": flat_coords,
+                    }
+                    total_dist = _haversine_path(flat_coords)
                     break
 
         log.info(f"Line {sem_code}: geometry={'yes' if geometry else 'NO'}, dist={total_dist}")
@@ -142,8 +197,6 @@ async def get_tram_positions(db: AsyncSession) -> list[dict]:
     lines = result.mappings().all()
 
     positions = []
-    # Use UTC+2 (Europe/Paris CEST) to match ficheHoraires schedule times
-    from datetime import timezone, timedelta
     now_utc = datetime.now(timezone.utc)
     now = (now_utc + timedelta(hours=2)).replace(tzinfo=None)
 
@@ -151,7 +204,13 @@ async def get_tram_positions(db: AsyncSession) -> list[dict]:
         if not line["geometry"]:
             continue
 
-        coords   = line["geometry"]["coordinates"]
+        geom = line["geometry"]
+        # Use the sorted flat coords for interpolation; fall back to coordinates if LineString
+        if geom.get("type") == "MultiLineString":
+            coords = geom.get("_flat") or _sort_multilinestring_segments(geom["coordinates"])
+        else:
+            coords = geom["coordinates"]
+
         route_id = f"SEM:{line['code']}"
 
         schedule     = await mreso_client.fetch_line_schedule(route_id)
@@ -180,18 +239,8 @@ async def get_tram_positions(db: AsyncSession) -> list[dict]:
 
 
 def _find_active_trips_from_schedule(schedule: dict, now: datetime) -> list[dict]:
-    """
-    Parse ficheHoraires dict and return currently-running trips.
-
-    The schedule dict has directions as keys ("0", "1", ...).
-    Each direction has "arrets" list where each stop has "trips" list of
-    departure-times in seconds-since-midnight.
-
-    A trip is active if first_stop_departure <= now <= last_stop_departure.
-    Progress = (now - first_dep) / (last_dep - first_dep)
-    """
     trips = []
-    now_secs = now.hour * 3600 + now.minute * 60 + now.second  # now is already UTC+2
+    now_secs = now.hour * 3600 + now.minute * 60 + now.second
 
     for dir_key, direction in schedule.items():
         arrets = direction.get("arrets", [])
@@ -217,17 +266,14 @@ def _find_active_trips_from_schedule(schedule: dict, now: datetime) -> list[dict
             except (TypeError, ValueError):
                 continue
 
-            # Handle trips past midnight
             if arr_secs < dep_secs:
                 arr_secs += 86400
 
-            # Is this trip currently running?
             if dep_secs <= now_secs <= arr_secs:
                 duration = arr_secs - dep_secs
                 elapsed  = now_secs - dep_secs
                 progress = max(0.0, min(1.0, elapsed / duration)) if duration > 0 else 0.0
 
-                # Find next stop
                 next_stop_name = None
                 for arret in arrets:
                     t = arret.get("trips", [])
@@ -294,7 +340,7 @@ def _bearing(a, b):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ANALYTICS (from collected StopTimeSnapshot rows)
+# ANALYTICS
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def get_delay_probability(db: AsyncSession, line_id: str | None = None) -> list[dict]:

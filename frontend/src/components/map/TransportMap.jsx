@@ -1,255 +1,355 @@
 import { useEffect, useRef } from 'react'
 import maplibregl from 'maplibre-gl'
-import 'maplibre-gl/dist/maplibre-gl.css'
 import { useTransportStore } from '../../store/useTransportStore'
 
-const GRENOBLE = [5.7245, 45.1875]
-const POLL_MS = 10000
+// ── Constants ────────────────────────────────────────────────────────────────
+const CENTER  = [5.7245, 45.1875]
+const ZOOM    = 13
+const POLL_MS = 10_000   // must match backend Redis TTL
 
-function lerp(a, b, t) { return a + (b - a) * t }
-function lerpAngle(a, b, t) {
-  const diff = ((b - a + 540) % 360) - 180
-  return (a + diff * t + 360) % 360
+// ── Math helpers ─────────────────────────────────────────────────────────────
+const lerp = (a, b, t) => a + (b - a) * t
+const lerpAngle = (a, b, t) => {
+  const d = ((b - a + 540) % 360) - 180
+  return (a + d * t + 360) % 360
 }
+const emptyFC = () => ({ type: 'FeatureCollection', features: [] })
 
+// ── Component ────────────────────────────────────────────────────────────────
 export default function TransportMap({ showParking }) {
   const containerRef = useRef(null)
-  const stateRef = useRef({
-    map: null,
-    ready: false,
-    markers: {},   // id -> { marker, el, from, to, startTime }
-    rafId: null,
-    pendingPositions: null,
-    pendingParking: null,
-    pendingLines: null,
-    pendingStops: null,
-  })
 
-  const { tramLines, tramStops, tramPositions, parkingLive, selectedLine, setSelectedLine, setSelectedParking } = useTransportStore()
+  // All mutable map state lives in a ref — never triggers re-renders
+  const s = useRef({
+    map:       null,
+    ready:     false,
+    rafId:     null,
+    // id -> { fromLon, fromLat, fromHeading, toLon, toLat, toHeading,
+    //         curLon, curLat, curHeading, startTime, color, code }
+    trams:     {},
+    // Hold latest prop values accessible inside the RAF loop and map callbacks
+    showParking: false,
+  }).current
 
-  // ── Init map once ─────────────────────────────────────────────────────────
+  const {
+    tramLines, tramStops, tramPositions, parkingLive,
+    selectedLine, setSelectedLine, setSelectedParking,
+  } = useTransportStore()
+
+  // ── Map init — runs once ─────────────────────────────────────────────────
   useEffect(() => {
-    const s = stateRef.current
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
-      center: GRENOBLE,
-      zoom: 13,
+      style:     'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+      center:    CENTER,
+      zoom:      ZOOM,
       attributionControl: false,
     })
     s.map = map
-    map.addControl(new maplibregl.NavigationControl(), 'top-right')
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right')
 
-    map.once('load', () => {
-      // Fix: container may have been 0×0 when the map was constructed
-      // (flex layout not yet painted). Force a resize now that the DOM has settled.
-      map.resize()
-
-      // Add sources
-      map.addSource('lines',   { type: 'geojson', data: empty() })
-      map.addSource('stops',   { type: 'geojson', data: empty() })
-      map.addSource('parking', { type: 'geojson', data: empty() })
-
-      // Line layer
-      map.addLayer({
-        id: 'lines', type: 'line', source: 'lines',
-        layout: { 'line-join': 'round', 'line-cap': 'round' },
-        paint: {
-          'line-color': ['get', 'color'],
-          'line-width': ['case', ['get', 'sel'], 6, 3],
-          'line-opacity': ['case', ['get', 'sel'], 1, 0.55],
-        },
-      })
-      map.on('click', 'lines', e => {
-        const id = e.features[0].properties.id
-        const store = useTransportStore.getState()
-        store.setSelectedLine(store.selectedLine?.id === id ? null : store.tramLines.find(l => l.id === id))
-      })
-
-      // Stop layer
-      map.addLayer({
-        id: 'stops', type: 'circle', source: 'stops', minzoom: 13,
-        paint: { 'circle-radius': 4, 'circle-color': '#1e293b', 'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 },
-      })
-
-      // Parking layer
-      map.addLayer({
-        id: 'parking', type: 'circle', source: 'parking',
-        paint: {
-          'circle-radius': 10,
-          'circle-color': ['get', 'color'],
-          'circle-opacity': 0.8,
-          'circle-stroke-color': '#fff',
-          'circle-stroke-width': 1.5,
-        },
-      })
-      map.addLayer({
-        id: 'parking-labels', type: 'symbol', source: 'parking',
-        layout: { 'text-field': ['get', 'label'], 'text-size': 10, 'text-font': ['Noto Sans Regular'] },
-        paint: { 'text-color': '#fff' },
-      })
-      map.on('click', 'parking', e => {
-        useTransportStore.getState().setSelectedParking(e.features[0].properties)
-      })
-
-      s.ready = true
-
-      // Flush any data that arrived before map was ready
-      if (s.pendingLines)    applyLines(s, s.pendingLines, s.pendingSelectedLine)
-      if (s.pendingStops)    applyStops(s, s.pendingStops)
-      if (s.pendingParking !== null) applyParking(s, s.pendingParking, s.pendingShowParking)
-      if (s.pendingPositions) applyPositions(s, s.pendingPositions)
-    })
-
-    // ResizeObserver: re-sync MapLibre whenever the container changes size.
-    // This covers the initial flex-layout paint AND any later panel opens/closes.
-    const ro = new ResizeObserver(() => { if (s.map) s.map.resize() })
+    // Resize whenever the flex container changes size (handles 0×0 on first paint)
+    const ro = new ResizeObserver(() => map.resize())
     ro.observe(containerRef.current)
 
-    // Animation loop
-    // MapLibre 4.x stops repainting when idle (cooperative rendering). Without an
-    // explicit triggerRepaint(), marker DOM positions are never flushed to screen
-    // until something else (zoom, pan) forces a redraw — hence markers invisible
-    // at rest but appearing on zoom. triggerRepaint() schedules one canvas frame.
+    map.once('load', () => {
+      map.resize()
+      setupSources(map)
+      setupLayers(map, s, setSelectedLine, setSelectedParking)
+      s.ready = true
+
+      // Flush any data that arrived before the map was ready
+      const st = useTransportStore.getState()
+      applyLines(map, st.tramLines, st.selectedLine)
+      applyStops(map, st.tramStops)
+      applyParking(map, st.parkingLive, s.showParking)
+      syncPositions(s, st.tramPositions)
+    })
+
+    // ── Animation loop ───────────────────────────────────────────────────
+    // Interpolates tram positions between backend polls.
+    // Updates a GeoJSON source every frame — MapLibre re-renders automatically.
     const loop = (ts) => {
       s.rafId = requestAnimationFrame(loop)
-      const active = Object.values(s.markers)
-      if (!active.length) return
-      active.forEach(m => {
-        const t = Math.min((ts - m.startTime) / POLL_MS, 1)
-        const lon = lerp(m.from.lon, m.to.lon, t)
-        const lat = lerp(m.from.lat, m.to.lat, t)
-        const heading = lerpAngle(m.from.heading, m.to.heading, t)
-        // MapLibre 4.x doesn't reproject marker DOM elements when map is idle.
-        // Bypass setLngLat entirely — project lon/lat ourselves and write translate directly.
-        const { x, y } = s.map.project([lon, lat])
-        if (m.el) m.el.style.transform = `translate(${x - 14}px, ${y - 14}px) rotate(${heading}deg)`
+      if (!s.ready) return
+      const entries = Object.values(s.trams)
+      if (!entries.length) return
+
+      const features = entries.map(t => {
+        const p       = Math.min((ts - t.startTime) / POLL_MS, 1)
+        t.curLon      = lerp(t.fromLon, t.toLon, p)
+        t.curLat      = lerp(t.fromLat, t.toLat, p)
+        t.curHeading  = lerpAngle(t.fromHeading, t.toHeading, p)
+        return {
+          type: 'Feature',
+          properties: { color: t.color, heading: t.curHeading, code: t.code },
+          geometry:   { type: 'Point', coordinates: [t.curLon, t.curLat] },
+        }
       })
+
+      map.getSource('trams')?.setData({ type: 'FeatureCollection', features })
     }
     s.rafId = requestAnimationFrame(loop)
 
     return () => {
       ro.disconnect()
       cancelAnimationFrame(s.rafId)
-      Object.values(s.markers).forEach(m => m.marker.remove())
       map.remove()
-      s.map = null
+      s.map   = null
       s.ready = false
+      s.trams = {}
     }
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Push data to map (or queue if not ready) ──────────────────────────────
+  // ── Sync props → map ─────────────────────────────────────────────────────
   useEffect(() => {
-    const s = stateRef.current
-    if (s.ready) applyLines(s, tramLines, selectedLine)
-    else { s.pendingLines = tramLines; s.pendingSelectedLine = selectedLine }
+    if (s.ready) applyLines(s.map, tramLines, selectedLine)
   }, [tramLines, selectedLine])
 
   useEffect(() => {
-    const s = stateRef.current
-    if (s.ready) applyStops(s, tramStops)
-    else s.pendingStops = tramStops
+    if (s.ready) applyStops(s.map, tramStops)
   }, [tramStops])
 
   useEffect(() => {
-    const s = stateRef.current
-    if (s.ready) applyParking(s, parkingLive, showParking)
-    else { s.pendingParking = parkingLive; s.pendingShowParking = showParking }
+    s.showParking = showParking
+    if (s.ready) applyParking(s.map, parkingLive, showParking)
   }, [parkingLive, showParking])
 
   useEffect(() => {
-    const s = stateRef.current
-    if (s.ready) applyPositions(s, tramPositions)
-    else s.pendingPositions = tramPositions
+    if (s.ready) syncPositions(s, tramPositions)
   }, [tramPositions])
 
-  return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
+  return (
+    <div
+      ref={containerRef}
+      style={{ position: 'absolute', inset: 0 }}
+    />
+  )
 }
 
-// ── Pure functions that touch the map ────────────────────────────────────────
+// ── Map setup ────────────────────────────────────────────────────────────────
 
-function empty() { return { type: 'FeatureCollection', features: [] } }
+function setupSources(map) {
+  map.addSource('lines',   { type: 'geojson', data: emptyFC() })
+  map.addSource('stops',   { type: 'geojson', data: emptyFC() })
+  map.addSource('parking', { type: 'geojson', data: emptyFC() })
+  map.addSource('trams',   { type: 'geojson', data: emptyFC() })
+}
 
-function applyLines(s, lines, selected) {
-  s.map.getSource('lines')?.setData({
-    type: 'FeatureCollection',
-    features: lines.filter(l => l.geometry).map(l => ({
-      type: 'Feature',
-      properties: { id: l.id, color: l.color || '#888', sel: selected?.id === l.id },
-      geometry: l.geometry,
-    })),
+function setupLayers(map, s, setSelectedLine, setSelectedParking) {
+  // ── Tram lines ──────────────────────────────────────────────────────────
+  map.addLayer({
+    id: 'lines-bg', type: 'line', source: 'lines',
+    layout: { 'line-join': 'round', 'line-cap': 'round' },
+    paint: {
+      'line-color':   ['get', 'color'],
+      'line-width':   5,
+      'line-opacity': 0.25,
+      'line-blur':    2,
+    },
+  })
+  map.addLayer({
+    id: 'lines', type: 'line', source: 'lines',
+    layout: { 'line-join': 'round', 'line-cap': 'round' },
+    paint: {
+      'line-color':   ['get', 'color'],
+      'line-width':   ['case', ['boolean', ['get', 'selected'], false], 5, 3],
+      'line-opacity': ['case', ['boolean', ['get', 'selected'], false], 1, 0.6],
+    },
+  })
+  map.on('click', 'lines', e => {
+    const id    = e.features[0].properties.id
+    const store = useTransportStore.getState()
+    const cur   = store.selectedLine
+    store.setSelectedLine(cur?.id === id ? null : store.tramLines.find(l => l.id === id))
+  })
+  map.on('mouseenter', 'lines', () => { map.getCanvas().style.cursor = 'pointer' })
+  map.on('mouseleave', 'lines', () => { map.getCanvas().style.cursor = '' })
+
+  // ── Stops ───────────────────────────────────────────────────────────────
+  map.addLayer({
+    id: 'stops', type: 'circle', source: 'stops', minzoom: 13,
+    paint: {
+      'circle-radius':       ['interpolate', ['linear'], ['zoom'], 13, 3, 16, 6],
+      'circle-color':        '#0f172a',
+      'circle-stroke-color': '#e2e8f0',
+      'circle-stroke-width': 1.5,
+    },
+  })
+
+  // ── Parking ─────────────────────────────────────────────────────────────
+  map.addLayer({
+    id: 'parking', type: 'circle', source: 'parking',
+    paint: {
+      'circle-radius':       10,
+      'circle-color':        ['get', 'color'],
+      'circle-opacity':      0.85,
+      'circle-stroke-color': '#ffffff',
+      'circle-stroke-width': 1.5,
+    },
+  })
+  map.addLayer({
+    id: 'parking-count', type: 'symbol', source: 'parking',
+    layout: {
+      'text-field':            ['get', 'label'],
+      'text-size':             10,
+      'text-allow-overlap':    true,
+      'text-ignore-placement': true,
+    },
+    paint: { 'text-color': '#ffffff', 'text-halo-color': 'rgba(0,0,0,0.3)', 'text-halo-width': 1 },
+  })
+  map.on('click', 'parking', e => {
+    setSelectedParking(e.features[0].properties)
+  })
+  map.on('mouseenter', 'parking', () => { map.getCanvas().style.cursor = 'pointer' })
+  map.on('mouseleave', 'parking', () => { map.getCanvas().style.cursor = '' })
+
+  // ── Trams ───────────────────────────────────────────────────────────────
+  // Outer glow
+  map.addLayer({
+    id: 'trams-glow', type: 'circle', source: 'trams',
+    paint: {
+      'circle-radius':   18,
+      'circle-color':    ['get', 'color'],
+      'circle-opacity':  0.2,
+      'circle-blur':     1,
+    },
+  })
+  // Main circle
+  map.addLayer({
+    id: 'trams-circle', type: 'circle', source: 'trams',
+    paint: {
+      'circle-radius':       11,
+      'circle-color':        ['get', 'color'],
+      'circle-stroke-color': '#ffffff',
+      'circle-stroke-width': 2.5,
+    },
+  })
+  // Direction arrow — rotated text symbol, aligned to map north
+  map.addLayer({
+    id: 'trams-arrow', type: 'symbol', source: 'trams',
+    layout: {
+      'text-field':               '▲',
+      'text-size':                9,
+      'text-rotate':              ['get', 'heading'],
+      'text-rotation-alignment':  'map',
+      'text-pitch-alignment':     'map',
+      'text-allow-overlap':       true,
+      'text-ignore-placement':    true,
+      'text-offset':              [0, -1.6],
+    },
+    paint: { 'text-color': '#ffffff', 'text-opacity': 0.95 },
+  })
+  // Line code label
+  map.addLayer({
+    id: 'trams-label', type: 'symbol', source: 'trams',
+    layout: {
+      'text-field':            ['get', 'code'],
+      'text-size':             9,
+      'text-allow-overlap':    true,
+      'text-ignore-placement': true,
+    },
+    paint: { 'text-color': '#ffffff', 'text-halo-color': 'rgba(0,0,0,0.4)', 'text-halo-width': 1 },
   })
 }
 
-function applyStops(s, stops) {
-  s.map.getSource('stops')?.setData({
-    type: 'FeatureCollection',
-    features: stops.map(st => ({
-      type: 'Feature',
-      properties: { id: st.id, name: st.name },
-      geometry: { type: 'Point', coordinates: [st.lon, st.lat] },
-    })),
-  })
-}
+// ── Data update functions ─────────────────────────────────────────────────────
 
-function applyParking(s, parking, show) {
-  if (!show) { s.map.getSource('parking')?.setData(empty()); return }
-  s.map.getSource('parking')?.setData({
+function applyLines(map, lines, selectedLine) {
+  if (!lines?.length) return
+  map.getSource('lines')?.setData({
     type: 'FeatureCollection',
-    features: parking.filter(p => p.lat && p.lon).map(p => {
-      const pct = p.occupancy_pct ?? 0
-      return {
-        type: 'Feature',
-        properties: {
-          id: p.id, name: p.name,
-          color: pct >= 85 ? '#ef4444' : pct >= 60 ? '#f97316' : '#22c55e',
-          label: p.available != null ? String(p.available) : '',
-        },
-        geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
+    features: lines.flatMap(l => {
+      if (!l.geometry) return []
+      const props = {
+        id:       l.id,
+        color:    l.color || '#888888',
+        selected: selectedLine?.id === l.id,
       }
+      const geom = l.geometry
+      // MultiLineString: emit one Feature per segment so each segment renders independently
+      if (geom.type === 'MultiLineString') {
+        return geom.coordinates.map(seg => ({
+          type: 'Feature',
+          properties: props,
+          geometry: { type: 'LineString', coordinates: seg },
+        }))
+      }
+      return [{ type: 'Feature', properties: props, geometry: geom }]
     }),
   })
 }
 
-function applyPositions(s, positions) {
-  const now = performance.now()
-  const seen = new Set()
-
-  positions.forEach(t => {
-    const id = `${t.line_id}_${t.trip_id}`
-    seen.add(id)
-    const existing = s.markers[id]
-
-    if (!existing) {
-      const el = makeTramEl(t.color, t.heading, t.line_code)
-      const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
-        .setLngLat([t.lon, t.lat])
-        .addTo(s.map)
-      s.markers[id] = { marker, el, from: t, to: t, startTime: now }
-    } else {
-      const cur = existing.marker.getLngLat()
-      const curHeading = lerpAngle(existing.from.heading, existing.to.heading,
-        Math.min((now - existing.startTime) / POLL_MS, 1))
-      existing.from = { lat: cur.lat, lon: cur.lng, heading: curHeading }
-      existing.to   = { lat: t.lat,  lon: t.lon,  heading: t.heading }
-      existing.startTime = now
-    }
-  })
-
-  // Remove gone trams
-  Object.keys(s.markers).forEach(id => {
-    if (!seen.has(id)) { s.markers[id].marker.remove(); delete s.markers[id] }
+function applyStops(map, stops) {
+  if (!stops?.length) return
+  map.getSource('stops')?.setData({
+    type: 'FeatureCollection',
+    features: stops.map(st => ({
+      type: 'Feature',
+      properties: { id: st.id, name: st.name },
+      geometry:   { type: 'Point', coordinates: [st.lon, st.lat] },
+    })),
   })
 }
 
-function makeTramEl(color, heading, code) {
-  const el = document.createElement('div')
-  el.style.cssText = `width:28px;height:28px;transform:rotate(${heading}deg)`
-  el.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">
-    <circle cx="14" cy="14" r="11" fill="${color||'#888'}" stroke="white" stroke-width="2"/>
-    <polygon points="14,3 11,9 17,9" fill="white" opacity="0.9"/>
-    <text x="14" y="19" text-anchor="middle" font-size="9" font-weight="bold"
-          fill="white" font-family="sans-serif">${code}</text>
-  </svg>`
-  return el
+function applyParking(map, parking, show) {
+  if (!show || !parking?.length) {
+    map.getSource('parking')?.setData(emptyFC())
+    return
+  }
+  map.getSource('parking')?.setData({
+    type: 'FeatureCollection',
+    features: parking
+      .filter(p => p.lat && p.lon)
+      .map(p => {
+        const pct = p.occupancy_pct ?? 0
+        const color = pct >= 85 ? '#ef4444' : pct >= 60 ? '#f97316' : '#22c55e'
+        return {
+          type: 'Feature',
+          properties: {
+            id:    p.id,
+            name:  p.name,
+            color,
+            label: p.available != null ? String(p.available) : '',
+          },
+          geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
+        }
+      }),
+  })
+}
+
+function syncPositions(s, positions) {
+  if (!positions?.length) return
+  const now  = performance.now()
+  const seen = new Set()
+
+  for (const t of positions) {
+    const id = `${t.line_id}_${t.trip_id}`
+    seen.add(id)
+    const ex = s.trams[id]
+
+    if (!ex) {
+      s.trams[id] = {
+        code: t.line_code, color: t.color || '#888888',
+        fromLon: t.lon, fromLat: t.lat, fromHeading: t.heading,
+        toLon:   t.lon, toLat:   t.lat, toHeading:   t.heading,
+        curLon:  t.lon, curLat:  t.lat, curHeading:  t.heading,
+        startTime: now,
+      }
+    } else {
+      // Animate from where we currently are to the new reported position
+      ex.fromLon     = ex.curLon
+      ex.fromLat     = ex.curLat
+      ex.fromHeading = ex.curHeading
+      ex.toLon       = t.lon
+      ex.toLat       = t.lat
+      ex.toHeading   = t.heading
+      ex.startTime   = now
+    }
+  }
+
+  // Remove stale trams
+  for (const id of Object.keys(s.trams)) {
+    if (!seen.has(id)) delete s.trams[id]
+  }
 }
