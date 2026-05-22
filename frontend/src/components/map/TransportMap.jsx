@@ -132,6 +132,11 @@ export default function TransportMap({ showParking }) {
     s.map.setLayoutProperty('lines', 'visibility', linesVisibility)
     s.map.setLayoutProperty('stops', 'visibility', linesVisibility)
     s.map.setLayoutProperty('lines-bg', 'visibility', linesVisibility)
+    s.map.setLayoutProperty('trams-circle', 'visibility', linesVisibility)
+    s.map.setLayoutProperty('trams-arrow', 'visibility', linesVisibility)
+    s.map.setLayoutProperty('trams-label', 'visibility', linesVisibility)
+    s.map.setLayoutProperty('trams-glow', 'visibility', linesVisibility)
+    
   }, [showParking])
 
   return (
