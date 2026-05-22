@@ -12,11 +12,11 @@ pg_isready -h localhost -U mreso -d mreso_db -q 2>/dev/null || sudo service post
 
 cd "$PROJECT_DIR/backend"
 source venv/bin/activate
-uvicorn app.main:app --reload --port 8000 &
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 &
 BACKEND_PID=$!
 
 cd "$PROJECT_DIR/frontend"
-npm run dev &
+npm run dev -- --host 0.0.0.0 &
 FRONTEND_PID=$!
 
 echo "  ✅ Backend:  http://localhost:8000"
