@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from ..cache import cache_get
-from ..mreso import get_schedule, now_paris_seconds, get_tram_lines, get_line_geometry
+from ..mreso import get_schedule, get_tram_lines, get_line_geometry
 
 router = APIRouter(prefix="/api/trams")
 
@@ -17,12 +17,15 @@ async def lines():
     cached = await cache_get("trams:lines")
     if cached:
         return cached
+
     raw = await get_tram_lines()
     result = []
+
     for line in raw:
         sem_code = line["id"].replace(":", "_")
         geom = await get_line_geometry(sem_code)
         result.append({**line, "geometry": geom})
+
     return result
 
 
@@ -41,13 +44,13 @@ async def schedule(route_id: str):
     start_ms = int(now.timestamp() * 1000) - 8 * 1080 * 1000
 
     data = await get_schedule(api_id, time_ms=start_ms)
+
     if data is None:
         return {}
 
     for _ in range(15):
         arrets = data.get("0", {}).get("arrets", [])
 
-        # Stop when the first stop has future trips
         first_trips = [
             x
             for t in arrets[0].get("trips", [])
@@ -58,10 +61,12 @@ async def schedule(route_id: str):
             break
 
         next_time = data.get("0", {}).get("nextTime")
+
         if not next_time:
             break
 
         data = await get_schedule(api_id, time_ms=next_time)
+
         if data is None:
             break
 
@@ -81,24 +86,10 @@ async def schedule(route_id: str):
                 if (x := safe_int(t)) is not None and x - now_s > -60
             ]
 
-    for _ in range(15):
-        arrets = data.get("0", {}).get("arrets", [])
-
-        max_trip = max(
-            (
-                x
-                for s in arrets
-                for t in s.get("trips", [])
-                if (x := safe_int(t)) is not None
-            ),
-            default=0,
-        )
-
-        import logging
-
-        logging.getLogger(__name__).warning("max=%d now=%d", max_trip, now_s)
-
-        if max_trip > now_s + 300:
-            break
-
     return data
+
+
+@router.get("/stopstats/{route_id}")
+async def stopstats(route_id: str):
+    cached = await cache_get(f"trams:daystats:{route_id}")
+    return cached or {}
