@@ -1,4 +1,6 @@
+import asyncio
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -17,11 +19,13 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    await refresh_tram_lines()
     await refresh_parking()
-    await build_day_schedule()
+    await refresh_tram_lines()
 
     start_scheduler()
+
+    # Run in background - can take ~30s
+    asyncio.create_task(build_day_schedule())
 
     yield
 
