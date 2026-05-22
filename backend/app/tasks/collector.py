@@ -27,75 +27,50 @@ scheduler = AsyncIOScheduler()
 
 
 async def collect_tram_stoptimes():
-    """
-    For each tram line, fetch schedule window and save StopTimeSnapshot rows
-    for any trip that is currently active (so we build delay history over time).
-    Since ficheHoraires gives scheduled times only (no real-time delay),
-    delay_seconds will be 0 unless we later get a real-time source.
-    """
     async with AsyncSessionLocal() as db:
         try:
             now = datetime.utcnow()
-            now_local = datetime.now()
-            now_secs = now_local.hour * 3600 + now_local.minute * 60 + now_local.second
             snapshots = []
 
+            # toutes les lignes tram
             for route_id in mreso_client.TRAM_ROUTE_IDS:
-                line_id = f"SEM_{route_id.split(':')[1]}"
-                schedule = await mreso_client.fetch_line_schedule(route_id)
 
-                for dir_key, direction in schedule.items():
-                    arrets = direction.get("arrets", [])
-                    if len(arrets) < 2:
-                        continue
-                    first_stop = arrets[0]
-                    last_stop  = arrets[-1]
-                    first_trips = first_stop.get("trips", [])
-                    last_trips  = last_stop.get("trips", [])
-                    n = min(len(first_trips), len(last_trips))
+                # tous les arrêts
+                result = await db.execute(text("SELECT id FROM tram_stops"))
+                stop_ids = [r["id"] for r in result.mappings()]
 
-                    for i in range(n):
-                        try:
-                            dep = int(first_trips[i])
-                            arr = int(last_trips[i])
-                        except (TypeError, ValueError):
-                            continue
-                        if arr < dep:
-                            arr += 86400
-                        if not (dep <= now_secs <= arr):
-                            continue
+                for stop_id in stop_ids:
 
-                        # Walk through all stops for this trip
-                        for arret in arrets:
-                            stop_id = arret.get("stopId", "")
-                            trips_at_stop = arret.get("trips", [])
-                            if i >= len(trips_at_stop):
-                                continue
-                            try:
-                                sched_secs = int(trips_at_stop[i])
-                            except (TypeError, ValueError):
-                                continue
+                    data = await mreso_client.fetch_stop_times(
+                        stop_id=stop_id,
+                        route_id=route_id
+                    )
 
-                            base = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-                            sched_dt = base + timedelta(seconds=sched_secs)
+                    for pattern in data:
+                        for t in pattern.get("times", []):
 
-                            snap = StopTimeSnapshot(
-                                line_id=line_id,
-                                stop_id=stop_id,
-                                trip_id=f"{route_id}_{dir_key}_{i}",
-                                scheduled_departure=sched_dt,
-                                realtime_departure=None,
-                                delay_seconds=0,   # no real-time source
-                                is_realtime=False,
-                                collected_at=now,
+                            snapshots.append(
+                                StopTimeSnapshot(
+                                    line_id=route_id.replace(":", "_"),
+                                    stop_id=stop_id,
+                                    trip_id=t.get("tripId"),
+                                    scheduled_departure=datetime.utcfromtimestamp(
+                                        t["serviceDay"] + t["scheduledDeparture"]
+                                    ),
+                                    realtime_departure=datetime.utcfromtimestamp(
+                                        t["serviceDay"] + t["realtimeDeparture"]
+                                    ) if t.get("realtimeDeparture") else None,
+                                    delay_seconds=t.get("arrivalDelay", 0),
+                                    is_realtime=t.get("realtime", False),
+                                    collected_at=now,
+                                )
                             )
-                            snapshots.append(snap)
 
             db.add_all(snapshots)
             await db.commit()
-            log.info(f"collect_tram_stoptimes: saved {len(snapshots)} snapshots")
+
         except Exception as e:
-            log.error(f"collect_tram_stoptimes error: {e}")
+            log.error(e)
             await db.rollback()
 
 
