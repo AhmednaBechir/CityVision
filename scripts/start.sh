@@ -1,29 +1,21 @@
 #!/usr/bin/env bash
 set -e
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
-PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+pgrep -x redis-server > /dev/null || sudo service redis-server start
+pg_isready -h localhost -U mreso -d mreso_db -q || sudo service postgresql start
 
-echo "════════════════════════════════════════"
-echo "  Grenoble Transport Visualizer"
-echo "════════════════════════════════════════"
-
-pgrep -x "redis-server" > /dev/null || sudo service redis-server start
-pg_isready -h localhost -U mreso -d mreso_db -q 2>/dev/null || sudo service postgresql start
-
-cd "$PROJECT_DIR/backend"
+cd "$DIR/backend"
 source venv/bin/activate
 uvicorn app.main:app --reload --port 8000 &
-BACKEND_PID=$!
+B=$!
 
-cd "$PROJECT_DIR/frontend"
+cd "$DIR/frontend"
 npm run dev &
-FRONTEND_PID=$!
+F=$!
 
-echo "  ✅ Backend:  http://localhost:8000"
-echo "  ✅ Frontend: http://localhost:5173"
-echo "  ✅ API docs: http://localhost:8000/docs"
-echo "  Ctrl+C to stop"
-echo ""
-
-trap "kill $BACKEND_PID $FRONTEND_PID 2>/dev/null; exit 0" INT TERM
+echo "Backend:  http://localhost:8000"
+echo "Frontend: http://localhost:5173"
+echo "Docs:     http://localhost:8000/docs"
+trap "kill $B $F 2>/dev/null" INT TERM
 wait
