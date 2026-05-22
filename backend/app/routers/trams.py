@@ -4,12 +4,19 @@ from ..mreso import get_schedule, now_paris_seconds, get_tram_lines, get_line_ge
 
 router = APIRouter(prefix="/api/trams")
 
+
+def safe_int(v):
+    try:
+        return int(v)
+    except:
+        return None
+
+
 @router.get("/lines")
 async def lines():
     cached = await cache_get("trams:lines")
     if cached:
         return cached
-    # fallback: fetch fresh
     raw = await get_tram_lines()
     result = []
     for line in raw:
@@ -18,24 +25,80 @@ async def lines():
         result.append({**line, "geometry": geom})
     return result
 
+
 @router.get("/schedule/{route_id}")
 async def schedule(route_id: str):
-    """
-    route_id: SEM_A, SEM_B, etc. (underscore, converted internally to SEM:A)
-    Returns directions with stops and next few departures.
-    """
     api_id = route_id.replace("_", ":")
-    data = await get_schedule(api_id)
+
+    from datetime import datetime
+    import pytz
+
+    TZ = pytz.timezone("Europe/Paris")
+    now = datetime.now(TZ)
+    now_s = now.hour * 3600 + now.minute * 60 + now.second
+
+    # Start 2 windows back from now
+    start_ms = int(now.timestamp() * 1000) - 8 * 1080 * 1000
+
+    data = await get_schedule(api_id, time_ms=start_ms)
     if data is None:
         return {}
-    now_s = now_paris_seconds()
-    # Attach human-readable times and flag upcoming
+
+    for _ in range(15):
+        arrets = data.get("0", {}).get("arrets", [])
+
+        # Stop when the first stop has future trips
+        first_trips = [
+            x
+            for t in arrets[0].get("trips", [])
+            if (x := safe_int(t)) is not None
+        ] if arrets else []
+
+        if any(t > now_s for t in first_trips):
+            break
+
+        next_time = data.get("0", {}).get("nextTime")
+        if not next_time:
+            break
+
+        data = await get_schedule(api_id, time_ms=next_time)
+        if data is None:
+            break
+
     for direction in data.values():
+        if not isinstance(direction, dict):
+            continue
+
         for stop in direction.get("arrets", []):
             trips = stop.get("trips", [])
+
             stop["upcoming"] = [
-                {"secs": int(t), "minutes_away": round((int(t) - now_s) / 60, 1)}
+                {
+                    "secs": x,
+                    "minutes_away": round((x - now_s) / 60, 1),
+                }
                 for t in trips
-                if int(t) - now_s > -60  # include trips up to 1 min past
+                if (x := safe_int(t)) is not None and x - now_s > -60
             ]
+
+    for _ in range(15):
+        arrets = data.get("0", {}).get("arrets", [])
+
+        max_trip = max(
+            (
+                x
+                for s in arrets
+                for t in s.get("trips", [])
+                if (x := safe_int(t)) is not None
+            ),
+            default=0,
+        )
+
+        import logging
+
+        logging.getLogger(__name__).warning("max=%d now=%d", max_trip, now_s)
+
+        if max_trip > now_s + 300:
+            break
+
     return data
