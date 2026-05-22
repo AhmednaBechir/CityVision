@@ -387,7 +387,7 @@ async def get_historical_punctuality(
         where += " AND line_id = :line_id"
         params["line_id"] = line_id
     sql = text(f"""
-        SELECT date_trunc('hour', collected_at AT TIME ZONE 'Europe/Paris') AS hour_bucket, line_id,
+        SELECT date_trunc('hour',collected_at) AS hour_bucket, line_id,
             ROUND(AVG(delay_seconds),0) AS avg_delay_s,
             ROUND(100.0*SUM(CASE WHEN delay_seconds BETWEEN -60 AND 60 THEN 1 ELSE 0 END)::numeric
                   /NULLIF(COUNT(*),0),1) AS on_time_pct
