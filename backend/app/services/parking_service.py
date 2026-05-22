@@ -157,7 +157,7 @@ async def get_availability_by_zone(db: AsyncSession) -> list[dict]:
             COUNT(l.parking_id)        AS parking_count,
             SUM(l.available)           AS total_available,
             SUM(pl.capacity)           AS total_capacity,
-            ROUND(AVG(l.occupancy_pct), 1) AS avg_occupancy_pct
+            ROUND(AVG(l.occupancy_pct)::numeric, 1) AS avg_occupancy_pct
         FROM latest l
         JOIN parking_locations pl ON pl.id = l.parking_id
         GROUP BY pl.zone
@@ -178,8 +178,8 @@ async def get_occupancy_over_time(
     sql = text(f"""
         SELECT date_trunc('hour', ps.collected_at) AS hour_bucket,
             ps.parking_id, pl.name AS parking_name, pl.zone,
-            ROUND(AVG(ps.occupancy_pct), 1) AS avg_occupancy_pct,
-            ROUND(AVG(ps.available), 0)     AS avg_available
+            ROUND(AVG(ps.occupancy_pct)::numeric, 1) AS avg_occupancy_pct,
+            ROUND(AVG(ps.available)::numeric, 0)     AS avg_available
         FROM parking_snapshots ps
         JOIN parking_locations pl ON pl.id = ps.parking_id
         {where}
@@ -201,7 +201,7 @@ async def get_congested_zones(db: AsyncSession) -> list[dict]:
         SELECT pl.zone,
             COUNT(*)  AS total_in_zone,
             SUM(CASE WHEN l.occupancy_pct >= {CONGESTION_THRESHOLD_PCT} THEN 1 ELSE 0 END) AS congested_count,
-            ROUND(AVG(l.occupancy_pct), 1) AS avg_pct,
+            ROUND(AVG(l.occupancy_pct)::numeric, 1) AS avg_pct,
             AVG(l.occupancy_pct) >= {CONGESTION_THRESHOLD_PCT} AS is_congested
         FROM latest l
         JOIN parking_locations pl ON pl.id = l.parking_id
