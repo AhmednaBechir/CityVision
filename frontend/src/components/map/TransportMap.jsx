@@ -125,6 +125,7 @@ export default function TransportMap({ showParking }) {
     // Parking
     const parkingVisibility = showParking ? 'visible' : 'none'
     s.map.setLayoutProperty('parking', 'visibility', parkingVisibility)
+    s.map.setLayoutProperty('parking-count', 'visibility', parkingVisibility)
 
     // Lines
     const linesVisibility = showParking ? 'none' : 'visible'
