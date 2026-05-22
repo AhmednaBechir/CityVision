@@ -32,10 +32,8 @@ async def collect_tram_stoptimes():
             now = datetime.utcnow()
             snapshots = []
 
-            # toutes les lignes tram
             for route_id in mreso_client.TRAM_ROUTE_IDS:
 
-                # tous les arrêts
                 result = await db.execute(text("SELECT id FROM tram_stops"))
                 stop_ids = [r["id"] for r in result.mappings()]
 

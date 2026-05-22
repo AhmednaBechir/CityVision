@@ -115,7 +115,7 @@ export default function ParkingAnalytics() {
           ) : (
             <ResponsiveContainer width="100%" height={150}>
               <AreaChart data={occupancy.map(r => ({
-                h: new Date(r.hour_bucket).getHours() + 'h',
+                h: new Date(r.hour_bucket).getUTCHours() + 'h',
                 pct: r.avg_occupancy_pct,
               }))}>
                 <defs>
