@@ -36,19 +36,19 @@ export default function TramPanel() {
       return
     }
 
-    const id = selectedLine.replace(
-      ':',
-      '_'
-    )
+    const id = selectedLine.replace(':', '_')
 
-    fetchSchedule(id)
-      .then(setSchedule)
-      .catch(console.error)
+    const loadSchedule = () =>
+      fetchSchedule(id).then(setSchedule).catch(console.error)
 
-    axios
-      .get(`/api/trams/stopstats/${id}`)
+    loadSchedule()
+    const t = setInterval(loadSchedule, 30000)
+
+    axios.get(`/api/trams/stopstats/${id}`)
       .then(r => setDayStats(r.data))
       .catch(console.error)
+
+    return () => clearInterval(t)
   }, [selectedLine])
 
   const stopSchedule =

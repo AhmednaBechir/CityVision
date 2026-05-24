@@ -31,19 +31,12 @@ export default function MapView() {
 
   // Fetch selected line schedule
   useEffect(() => {
-    if (!selectedLine) {
-      setScheduleData(null)
-      return
-    }
-
-    const id = selectedLine.replace(
-      ':',
-      '_'
-    )
-
-    fetchSchedule(id)
-      .then(setScheduleData)
-      .catch(console.error)
+    if (!selectedLine) { setScheduleData(null); return }
+    const id = selectedLine.replace(':', '_')
+    const load = () => fetchSchedule(id).then(setScheduleData).catch(console.error)
+    load()
+    const t = setInterval(load, 1000)
+    return () => clearInterval(t)
   }, [selectedLine])
 
   // Animated tram positions
