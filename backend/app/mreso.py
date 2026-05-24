@@ -11,7 +11,7 @@ BASE = "https://data.mobilites-m.fr/api"
 HEADERS = {"Origin": "http://localhost:5173"}
 TZ = pytz.timezone("Europe/Paris")
 
-client = httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=10)
+client = httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=30)
 
 async def get_tram_lines():
     """Returns list of tram line dicts with id, shortName, color, textColor."""
