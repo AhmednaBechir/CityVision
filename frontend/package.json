@@ -6,6 +6,10 @@
     "build": "vite build"
   },
   "dependencies": {
+    "@turf/along": "^7.3.5",
+    "@turf/helpers": "^7.3.5",
+    "@turf/length": "^7.3.5",
+    "@turf/nearest-point-on-line": "^7.3.5",
     "axios": "^1.6.8",
     "maplibre-gl": "^4.1.3",
     "recharts": "^2.12.4",

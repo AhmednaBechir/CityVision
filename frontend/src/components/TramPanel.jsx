@@ -1,13 +1,33 @@
-import React, { useEffect, useState } from 'react'
+import React, {
+  useEffect,
+  useState
+} from 'react'
+
 import { useStore } from '../store'
 import { fetchSchedule } from '../api'
 import axios from 'axios'
 
 export default function TramPanel() {
-  const { tramLines, selectedLine, selectedStop, setSelectedLine } = useStore()
+  const {
+    tramLines,
+    selectedLine,
+    selectedStop,
+    setSelectedLine
+  } = useStore()
 
-  const [schedule, setSchedule] = useState(null)
-  const [dayStats, setDayStats] = useState(null)
+  // Debug selected stop
+  useEffect(() => {
+    console.log(
+      'selectedStop:',
+      selectedStop?.stopName
+    )
+  }, [selectedStop])
+
+  const [schedule, setSchedule] =
+    useState(null)
+
+  const [dayStats, setDayStats] =
+    useState(null)
 
   useEffect(() => {
     if (!selectedLine) {
@@ -16,33 +36,62 @@ export default function TramPanel() {
       return
     }
 
-    const id = selectedLine.replace(':', '_')
+    const id = selectedLine.replace(
+      ':',
+      '_'
+    )
 
     fetchSchedule(id)
       .then(setSchedule)
       .catch(console.error)
 
-    axios.get(`/api/trams/stopstats/${id}`)
+    axios
+      .get(`/api/trams/stopstats/${id}`)
       .then(r => setDayStats(r.data))
       .catch(console.error)
-
   }, [selectedLine])
 
-  const stopSchedule = selectedStop && schedule
-    ? Object.values(schedule).flatMap(dir =>
-        (dir.arrets || []).filter(
-          s => s.stopId === selectedStop.stopId
-        )
-      )[0]
-    : null
+  const stopSchedule =
+    selectedStop && schedule
+      ? Object.values(schedule)
+          .flatMap(
+            dir => dir.arrets || []
+          )
+          .filter(
+            s =>
+              s.stopId ===
+              selectedStop.stopId
+          )[0]
+      : null
 
-  // Match by rounded coordinates instead of stopId
-  const stopStats = selectedStop && dayStats
-    ? dayStats[selectedStop.stopName]
-    : null
+  {/*console.log(
+    'stopSchedule:',
+    stopSchedule,
+    'stopId:',
+    selectedStop?.stopId
+  )
 
-  const fmt = (secs) =>
-    `${Math.floor(secs / 3600).toString().padStart(2, '0')}:${Math.floor((secs % 3600) / 60).toString().padStart(2, '0')}`
+  console.log('upcoming:', stopSchedule?.upcoming, 'length:', stopSchedule?.upcoming?.length)
+  */}
+  // Match by stop name
+  const stopStats =
+    selectedStop && dayStats
+      ? dayStats[
+          selectedStop.stopName
+        ]
+      : null
+
+  const fmt = secs =>
+    `${Math.floor(secs / 3600)
+      .toString()
+      .padStart(
+        2,
+        '0'
+      )}:${Math.floor(
+      (secs % 3600) / 60
+    )
+      .toString()
+      .padStart(2, '0')}`
 
   return (
     <div className="card">
@@ -54,13 +103,22 @@ export default function TramPanel() {
             key={line.id}
             className="line-badge"
             style={{
-              background: '#' + (line.color || '555'),
-              color: '#' + (line.textColor || 'fff'),
-              outline: selectedLine === line.id
-                ? '2px solid white'
-                : 'none',
+              background:
+                '#' +
+                (line.color || '555'),
+              color:
+                '#' +
+                (line.textColor ||
+                  'fff'),
+              outline:
+                selectedLine ===
+                line.id
+                  ? '2px solid white'
+                  : 'none'
             }}
-            onClick={() => setSelectedLine(line.id)}
+            onClick={() =>
+              setSelectedLine(line.id)
+            }
           >
             {line.shortName}
           </span>
@@ -71,15 +129,16 @@ export default function TramPanel() {
         <div
           style={{
             marginTop: 12,
-            borderTop: '1px solid #2a2d3a',
-            paddingTop: 10,
+            borderTop:
+              '1px solid #2a2d3a',
+            paddingTop: 10
           }}
         >
           <div
             style={{
               fontSize: 13,
               fontWeight: 600,
-              marginBottom: 8,
+              marginBottom: 8
             }}
           >
             📍 {selectedStop.stopName}
@@ -90,45 +149,57 @@ export default function TramPanel() {
             style={{
               fontSize: 11,
               color: '#8888aa',
-              marginBottom: 4,
+              marginBottom: 4
             }}
           >
             NEXT DEPARTURES
           </div>
 
-          {stopSchedule?.upcoming?.length > 0 ? (
-            stopSchedule.upcoming.map((u, i) => (
-              <div
-                key={i}
-                style={{
-                  fontSize: 12,
-                  padding: '3px 0',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                }}
-              >
-                <span
+          {stopSchedule?.upcoming
+            ?.length > 0 ? (
+            stopSchedule.upcoming.map(
+              (u, i) => (
+                <div
+                  key={i}
                   style={{
-                    color: u.minutes_away < 2
-                      ? '#4caf50'
-                      : '#ccc',
+                    fontSize: 12,
+                    padding:
+                      '3px 0',
+                    display: 'flex',
+                    justifyContent:
+                      'space-between'
                   }}
                 >
-                  {u.minutes_away <= 0
-                    ? '🚋 now'
-                    : `${u.minutes_away} min`}
-                </span>
+                  <span
+                    style={{
+                      color:
+                        u.minutes_away <
+                        2
+                          ? '#4caf50'
+                          : '#ccc'
+                    }}
+                  >
+                    {u.minutes_away <=
+                    0
+                      ? '🚋 now'
+                      : `${u.minutes_away} min`}
+                  </span>
 
-                <span style={{ color: '#666' }}>
-                  {fmt(u.secs)}
-                </span>
-              </div>
-            ))
+                  <span
+                    style={{
+                      color: '#666'
+                    }}
+                  >
+                    {fmt(u.secs)}
+                  </span>
+                </div>
+              )
+            )
           ) : (
             <div
               style={{
                 fontSize: 12,
-                color: '#666',
+                color: '#666'
               }}
             >
               No upcoming departures
@@ -140,72 +211,118 @@ export default function TramPanel() {
             <div
               style={{
                 marginTop: 10,
-                borderTop: '1px solid #2a2d3a',
-                paddingTop: 8,
+                borderTop:
+                  '1px solid #2a2d3a',
+                paddingTop: 8
               }}
             >
               <div
                 style={{
                   fontSize: 11,
                   color: '#8888aa',
-                  marginBottom: 6,
+                  marginBottom: 6
                 }}
               >
                 TODAY'S SERVICE
               </div>
 
-              {Object.entries(stopStats.dirs || {}).map(([dir, s]) => (
+              {Object.entries(
+                stopStats.dirs || {}
+              ).map(([dir, s]) => (
                 <div
                   key={dir}
-                  style={{ marginBottom: 8 }}
+                  style={{
+                    marginBottom: 8
+                  }}
                 >
                   <div
                     style={{
                       fontSize: 11,
                       color: '#aaa',
-                      marginBottom: 4,
+                      marginBottom: 4
                     }}
                   >
-                    → {s.terminus || `Direction ${dir}`}
+                    →{' '}
+                    {s.terminus ||
+                      `Direction ${dir}`}
                   </div>
 
                   <div
                     style={{
                       display: 'grid',
-                      gridTemplateColumns: '1fr 1fr',
+                      gridTemplateColumns:
+                        '1fr 1fr',
                       gap: '4px 0',
-                      fontSize: 12,
+                      fontSize: 12
                     }}
                   >
-                    <span style={{ color: '#888' }}>
+                    <span
+                      style={{
+                        color: '#888'
+                      }}
+                    >
                       First
                     </span>
 
-                    <span style={{ textAlign: 'right' }}>
+                    <span
+                      style={{
+                        textAlign:
+                          'right'
+                      }}
+                    >
                       {fmt(s.first)}
                     </span>
 
-                    <span style={{ color: '#888' }}>
+                    <span
+                      style={{
+                        color: '#888'
+                      }}
+                    >
                       Last
                     </span>
 
-                    <span style={{ textAlign: 'right' }}>
+                    <span
+                      style={{
+                        textAlign:
+                          'right'
+                      }}
+                    >
                       {fmt(s.last)}
                     </span>
 
-                    <span style={{ color: '#888' }}>
+                    <span
+                      style={{
+                        color: '#888'
+                      }}
+                    >
                       Frequency
                     </span>
 
-                    <span style={{ textAlign: 'right' }}>
-                      every {s.avg_gap_min} min
+                    <span
+                      style={{
+                        textAlign:
+                          'right'
+                      }}
+                    >
+                      every{' '}
+                      {s.avg_gap_min}{' '}
+                      min
                     </span>
 
-                    <span style={{ color: '#888' }}>
+                    <span
+                      style={{
+                        color: '#888'
+                      }}
+                    >
                       Daily trips
                     </span>
 
-                    <span style={{ textAlign: 'right' }}>
+                    <span
+                      style={{
+                        textAlign:
+                          'right'
+                      }}
+                    >
                       {s.total_trips}
                     </span>
                   </div>

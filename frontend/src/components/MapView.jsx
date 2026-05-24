@@ -1,7 +1,14 @@
-import React, { useEffect, useRef } from 'react'
+import React, {
+  useEffect,
+  useRef,
+  useState
+} from 'react'
+
 import maplibregl from 'maplibre-gl'
+
 import { useStore } from '../store'
 import { fetchSchedule } from '../api'
+import { useTramAnimation } from '../hooks/UseTramAnimation'
 
 export default function MapView() {
   const mapRef = useRef(null)
@@ -9,6 +16,10 @@ export default function MapView() {
 
   const markersRef = useRef([]) // Tram stop markers
   const parkingMarkersRef = useRef([]) // Parking markers
+  const tramMarkersRef = useRef([]) // Animated tram markers
+
+  const [scheduleData, setScheduleData] =
+    useState(null)
 
   const {
     tramLines,
@@ -18,16 +29,37 @@ export default function MapView() {
     viewMode
   } = useStore()
 
+  // Fetch selected line schedule
+  useEffect(() => {
+    if (!selectedLine) {
+      setScheduleData(null)
+      return
+    }
+
+    const id = selectedLine.replace(
+      ':',
+      '_'
+    )
+
+    fetchSchedule(id)
+      .then(setScheduleData)
+      .catch(console.error)
+  }, [selectedLine])
+
+  // Animated tram positions
+  const tramPositions = useTramAnimation(
+    tramLines,
+    selectedLine,
+    scheduleData
+  )
+
+  console.log('tramPositions:', tramPositions.length, tramPositions)
+
   // Highlight selected parking + center map
   useEffect(() => {
     return useStore.subscribe(
       state => state.selectedParking,
       selectedParking => {
-        console.log(
-          'subscribe fired',
-          selectedParking?.id
-        )
-
         parkingMarkersRef.current.forEach(
           ({ el, parking: pm }) => {
             const isSelected =
@@ -64,20 +96,22 @@ export default function MapView() {
 
   // Initialize map
   useEffect(() => {
-    mapInstance.current = new maplibregl.Map({
-      container: mapRef.current,
-      style:
-        'https://tiles.openfreemap.org/styles/positron',
-      center: [5.7245, 45.1885],
-      zoom: 13,
-    })
+    mapInstance.current =
+      new maplibregl.Map({
+        container: mapRef.current,
+        style:
+          'https://tiles.openfreemap.org/styles/positron',
+        center: [5.7245, 45.1885],
+        zoom: 13
+      })
 
     mapInstance.current.addControl(
       new maplibregl.NavigationControl(),
       'top-right'
     )
 
-    return () => mapInstance.current?.remove()
+    return () =>
+      mapInstance.current?.remove()
   }, [])
 
   // Draw tram lines
@@ -147,7 +181,11 @@ export default function MapView() {
 
     if (map.isStyleLoaded()) draw()
     else map.on('load', draw)
-  }, [tramLines, selectedLine, viewMode])
+  }, [
+    tramLines,
+    selectedLine,
+    viewMode
+  ])
 
   // Draw stop markers
   useEffect(() => {
@@ -156,12 +194,18 @@ export default function MapView() {
     if (!map) return
 
     // Clear old stop markers
-    markersRef.current.forEach(m => m.remove())
+    markersRef.current.forEach(m =>
+      m.remove()
+    )
+
     markersRef.current = []
 
     if (!selectedLine) return
 
-    const lineId = selectedLine.replace(':', '_')
+    const lineId = selectedLine.replace(
+      ':',
+      '_'
+    )
 
     fetchSchedule(lineId)
       .then(data => {
@@ -194,14 +238,17 @@ export default function MapView() {
             };
           `
 
-          // Restore tram stop click selection
-          el.addEventListener('click', e => {
-            e.stopPropagation()
+          // Stop click handler
+          el.addEventListener(
+            'click',
+            e => {
+              e.stopPropagation()
 
-            useStore
-              .getState()
-              .setSelectedStop(stop)
-          })
+              useStore
+                .getState()
+                .setSelectedStop(stop)
+            }
+          )
 
           const marker =
             new maplibregl.Marker({
@@ -234,20 +281,67 @@ export default function MapView() {
     })
   }, [viewMode])
 
+  // Animated tram markers
+  useEffect(() => {
+    const map = mapInstance.current
+
+    if (!map) return
+
+    // Clear old tram markers
+    tramMarkersRef.current.forEach(m =>
+      m.remove()
+    )
+
+    tramMarkersRef.current = []
+
+    tramPositions.forEach(pos => {
+      const el =
+        document.createElement('div')
+
+      el.style.cssText = `
+        width: 16px; height: 16px; border-radius: 50%;
+        background: ${pos.color};
+        border: 3px solid white;
+        box-shadow: 0 0 10px rgba(0,0,0,0.8);
+        z-index: 500;
+      `
+
+      el.title = `${pos.stopA} → ${pos.stopB}`
+
+      const marker =
+        new maplibregl.Marker({
+          element: el,
+          anchor: 'center'
+        })
+          .setLngLat([
+            pos.lon,
+            pos.lat
+          ])
+          .addTo(map)
+
+      tramMarkersRef.current.push(marker)
+    })
+  }, [tramPositions])
+
   // Draw parking markers
   useEffect(() => {
     const map = mapInstance.current
 
     if (!map || !parking.length) return
 
-    const sensorParking = parking.filter(
-      p => p.lat && p.lon && p.has_sensor
-    )
+    const sensorParking =
+      parking.filter(
+        p =>
+          p.lat &&
+          p.lon &&
+          p.has_sensor
+      )
 
     const addMarkers = () => {
       // Only update colors if same count
       if (
-        parkingMarkersRef.current.length ===
+        parkingMarkersRef.current
+          .length ===
         sensorParking.length
       ) {
         parkingMarkersRef.current.forEach(
@@ -281,7 +375,8 @@ export default function MapView() {
 
       // Full redraw if parking set changed
       parkingMarkersRef.current.forEach(
-        ({ marker }) => marker.remove()
+        ({ marker }) =>
+          marker.remove()
       )
 
       parkingMarkersRef.current = []
@@ -325,21 +420,24 @@ export default function MapView() {
         `
 
         // Select parking
-        el.addEventListener('click', e => {
-          e.stopPropagation()
+        el.addEventListener(
+          'click',
+          e => {
+            e.stopPropagation()
 
-          const current =
-            useStore.getState()
-              .selectedParking
+            const current =
+              useStore.getState()
+                .selectedParking
 
-          useStore
-            .getState()
-            .setSelectedParking(
-              current?.id === p.id
-                ? null
-                : p
-            )
-        })
+            useStore
+              .getState()
+              .setSelectedParking(
+                current?.id === p.id
+                  ? null
+                  : p
+              )
+          }
+        )
 
         const popup =
           new maplibregl.Popup({
@@ -351,13 +449,15 @@ export default function MapView() {
             </div>
           `)
 
-        // FIX: keep marker centered during size changes
         const marker =
           new maplibregl.Marker({
             element: el,
             anchor: 'center'
           })
-            .setLngLat([p.lon, p.lat])
+            .setLngLat([
+              p.lon,
+              p.lat
+            ])
             .setPopup(popup)
             .addTo(map)
 
