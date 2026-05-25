@@ -26,7 +26,8 @@ export default function MapView() {
     parking,
     selectedLine,
     setSelectedStop,
-    viewMode
+    viewMode,
+    voi
   } = useStore()
 
   // Fetch selected line schedule
@@ -465,6 +466,59 @@ export default function MapView() {
     if (map.isStyleLoaded()) addMarkers()
     else map.on('load', addMarkers)
   }, [parking, viewMode])
+
+  useEffect(() => {
+    const map = mapInstance.current
+    if (!map || !voi?.features) return
+
+    const sourceId = 'voi'
+
+    if (!map.getSource(sourceId)) {
+      map.addSource(sourceId, {
+        type: 'geojson',
+        data: voi
+      })
+
+      map.addLayer({
+        id: 'voi-layer',
+        type: 'circle',
+        source: sourceId,
+        paint: {
+          'circle-radius': 5,
+          'circle-color': [
+            'case',
+            ['==', ['get', 'type'], 'voi_scooter'],
+            '#e97325',
+            '#553f15'
+          ],
+          'circle-stroke-width': 1,
+          'circle-stroke-color': '#fff'
+        }
+      })
+
+      map.setLayoutProperty(
+        'voi-layer',
+        'visibility',
+        viewMode === 'voi' ? 'visible' : 'none'
+      )
+      
+    } else {
+      map.getSource(sourceId).setData(voi)
+    }
+  }, [voi])
+
+  useEffect(() => {
+    const map = mapInstance.current
+    if (!map) return
+
+    if (map.getLayer('voi-layer')) {
+      map.setLayoutProperty(
+        'voi-layer',
+        'visibility',
+        viewMode === 'voi' ? 'visible' : 'none'
+      )
+    }
+  }, [viewMode])
 
   // Toggle parking visibility
   useEffect(() => {

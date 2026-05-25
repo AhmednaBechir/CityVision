@@ -9,9 +9,10 @@ from .scheduler import (
     start_scheduler,
     refresh_parking,
     refresh_tram_lines,
+    refresh_voi,
     build_day_schedule,
 )
-from .routers import trams, parking
+from .routers import trams, parking, voi
 
 
 @asynccontextmanager
@@ -21,6 +22,7 @@ async def lifespan(app: FastAPI):
 
     await refresh_parking()
     await refresh_tram_lines()
+    await refresh_voi()
 
     start_scheduler()
 
@@ -44,6 +46,7 @@ app.add_middleware(
 
 app.include_router(trams.router)
 app.include_router(parking.router)
+app.include_router(voi.router)
 
 
 @app.get("/health")

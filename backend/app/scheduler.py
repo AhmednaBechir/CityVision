@@ -1,5 +1,5 @@
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from .mreso import get_parking_static, get_parking_live
+from .mreso import get_parking_static, get_parking_live, get_voi_free_bikes
 from .cache import cache_set
 from .db import SessionLocal
 from .models import ParkingSnapshot
@@ -332,6 +332,50 @@ async def build_day_schedule():
             repr(e),
         )
 
+async def refresh_voi():
+    try:
+        bikes = await get_voi_free_bikes()
+
+        features = []
+
+        for b in bikes:
+            if b.get("lat") is None or b.get("lon") is None:
+                continue
+
+            features.append({
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [b["lon"], b["lat"]],
+                },
+                "properties": {
+                    "id": b["bike_id"],
+                    "type": b.get("vehicle_type_id"),
+                    "reserved": b.get("is_reserved"),
+                    "disabled": b.get("is_disabled"),
+                    "range_meters": b.get("current_range_meters"),
+                    "last_reported": b.get("last_reported"),
+                },
+            })
+
+        geojson = {
+            "type": "FeatureCollection",
+            "features": features
+        }
+
+        await cache_set("voi:live", geojson, ttl=120)
+
+        log.info(
+            "VOI refreshed: %d vehicles",
+            len(geojson["features"]),
+        )
+
+    except Exception as e:
+        log.error(
+            "refresh_voi error: %s",
+            repr(e),
+        )
+
 
 def start_scheduler():
     scheduler.add_job(
@@ -354,6 +398,13 @@ def start_scheduler():
         hour=3,
         minute=0,
         id="day_schedule",
+    )
+
+    scheduler.add_job(
+        refresh_voi,
+        "interval",
+        minutes=1,
+        id="voi"
     )
 
     scheduler.start()

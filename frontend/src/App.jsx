@@ -1,12 +1,13 @@
 import React, { useEffect } from 'react'
-import { fetchTramLines, fetchParkingLive } from './api'
+import { fetchTramLines, fetchParkingLive, fetchVoiLive } from './api'
 import { useStore } from './store'
 import MapView from './components/MapView'
 import TramPanel from './components/TramPanel'
 import ParkingPanel from './components/ParkingPanel'
+import VoiPanel from './components/VoiPanel'
 
 export default function App() {
-  const { setTramLines, setParking, setSelectedLine, viewMode, setViewMode } = useStore()
+  const { setTramLines, setParking, setSelectedLine, viewMode, setViewMode, setVoi } = useStore()
 
   useEffect(() => {
     const loadLines = () => fetchTramLines()
@@ -19,7 +20,12 @@ export default function App() {
     const loadParking = () => fetchParkingLive().then(setParking).catch(console.error)
     loadParking()
     const t = setInterval(loadParking, 30000)
-    return () => clearInterval(t)
+    const loadVoi = () => fetchVoiLive().then(setVoi).catch(console.error)
+    loadVoi()
+    const t2 = setInterval(loadVoi, 60000)
+    return () => {clearInterval(t)
+      clearInterval(t2)
+    }
   }, [])
 
   return (
@@ -49,8 +55,30 @@ export default function App() {
           >
             🅿️ Parking
           </button>
+          <button
+            onClick={() => setViewMode('voi')}
+            style={{
+              flex: 1,
+              padding: '8px 0',
+              borderRadius: 8,
+              border: 'none',
+              cursor: 'pointer',
+              background: viewMode === 'voi' ? '#3376b8' : '#2a2d3a',
+              color: '#fff',
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+          >
+            🛴 VOI
+          </button>
         </div>
-        {viewMode === 'trams' ? <TramPanel /> : <ParkingPanel />}
+        {viewMode === 'trams' ? (
+          <TramPanel />
+        ) : viewMode === 'parking' ? (
+          <ParkingPanel />
+        ) : viewMode === 'voi' ? (
+          <VoiPanel />
+        ) : null}
       </div>
       <div className="map-container">
         <MapView />

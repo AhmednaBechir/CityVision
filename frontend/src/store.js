@@ -7,6 +7,7 @@ export const useStore = create(subscribeWithSelector((set) => ({
   selectedStop: null,
   selectedParking: null,
   parking: [],
+  voi: [],
   viewMode: 'trams',
   setTramLines: (lines) => set({ tramLines: lines }),
   setSelectedLine: (line) => set({ selectedLine: line, selectedStop: null }),
@@ -14,4 +15,5 @@ export const useStore = create(subscribeWithSelector((set) => ({
   setSelectedParking: (p) => set({ selectedParking: p }),
   setParking: (p) => set({ parking: p }),
   setViewMode: (mode) => set({ viewMode: mode }),
+  setVoi: (voi) => set({ voi }),
 })))

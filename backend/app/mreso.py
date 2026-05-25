@@ -63,3 +63,15 @@ def now_paris_seconds() -> int:
     """Current time as seconds since midnight in Europe/Paris."""
     now = datetime.now(TZ)
     return now.hour * 3600 + now.minute * 60 + now.second
+
+async def get_voi_free_bikes():
+    """
+    Returns list of free-floating Voi vehicles.
+    Includes bikes + scooters.
+    """
+    r = await client.get(f"{BASE}/gbfs/voi_grenoble/free_bike_status")
+    if r.status_code == 204:
+        return []
+    r.raise_for_status()
+    data = r.json()
+    return data.get("data", {}).get("bikes", [])
