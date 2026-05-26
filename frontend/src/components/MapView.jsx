@@ -32,11 +32,22 @@ export default function MapView() {
 
   // Fetch selected line schedule
   useEffect(() => {
-    if (!selectedLine) { setScheduleData(null); return }
+    if (!selectedLine) {
+      setScheduleData(null)
+      return
+    }
+
     const id = selectedLine.replace(':', '_')
-    const load = () => fetchSchedule(id).then(setScheduleData).catch(console.error)
+
+    const load = () =>
+      fetchSchedule(id)
+        .then(setScheduleData)
+        .catch(console.error)
+
     load()
+
     const t = setInterval(load, 1000)
+
     return () => clearInterval(t)
   }, [selectedLine])
 
@@ -46,8 +57,6 @@ export default function MapView() {
     selectedLine,
     scheduleData
   )
-
-  console.log('tramPositions:', tramPositions.length, tramPositions)
 
   // Highlight selected parking + center map
   useEffect(() => {
@@ -84,6 +93,37 @@ export default function MapView() {
             essential: true
           })
         }
+      }
+    )
+  }, [])
+
+  // Highlight selected stop
+  useEffect(() => {
+    return useStore.subscribe(
+      state => state.selectedStop,
+      selectedStop => {
+        markersRef.current.forEach(
+          marker => {
+            const el =
+              marker.getElement()
+
+            if (!el) return
+
+            const isSelected =
+              el._stopId ===
+              selectedStop?.stopId
+
+            if (isSelected) {
+              el.classList.add(
+                'stop-selected'
+              )
+            } else {
+              el.classList.remove(
+                'stop-selected'
+              )
+            }
+          }
+        )
       }
     )
   }, [])
@@ -232,6 +272,9 @@ export default function MapView() {
             };
           `
 
+          // Tag marker with stopId
+          el._stopId = stop.stopId
+
           // Stop click handler
           el.addEventListener(
             'click',
@@ -265,16 +308,6 @@ export default function MapView() {
     viewMode
   ])
 
-  // Toggle stop marker visibility
-  useEffect(() => {
-    markersRef.current.forEach(m => {
-      m.getElement().style.visibility =
-        viewMode === 'trams'
-          ? 'visible'
-          : 'hidden'
-    })
-  }, [viewMode])
-
   // Animated tram markers
   useEffect(() => {
     const map = mapInstance.current
@@ -293,11 +326,18 @@ export default function MapView() {
         document.createElement('div')
 
       el.style.cssText = `
-        width: 16px; height: 16px; border-radius: 50%;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
         background: ${pos.color};
         border: 3px solid white;
         box-shadow: 0 0 10px rgba(0,0,0,0.8);
         z-index: 500;
+        visibility: ${
+          viewMode === 'trams'
+            ? 'visible'
+            : 'hidden'
+        };
       `
 
       el.title = `${pos.stopA} → ${pos.stopB}`
@@ -315,7 +355,7 @@ export default function MapView() {
 
       tramMarkersRef.current.push(marker)
     })
-  }, [tramPositions])
+  }, [tramPositions, viewMode])
 
   // Draw parking markers
   useEffect(() => {
@@ -385,8 +425,8 @@ export default function MapView() {
           pct > 0.4
             ? '#4caf50'
             : pct > 0.15
-              ? '#ff9800'
-              : '#f44336'
+            ? '#ff9800'
+            : '#f44336'
 
         const el =
           document.createElement('div')
@@ -467,8 +507,10 @@ export default function MapView() {
     else map.on('load', addMarkers)
   }, [parking, viewMode])
 
+  // VOI layer
   useEffect(() => {
     const map = mapInstance.current
+
     if (!map || !voi?.features) return
 
     const sourceId = 'voi'
@@ -499,23 +541,28 @@ export default function MapView() {
       map.setLayoutProperty(
         'voi-layer',
         'visibility',
-        viewMode === 'voi' ? 'visible' : 'none'
+        viewMode === 'voi'
+          ? 'visible'
+          : 'none'
       )
-      
     } else {
       map.getSource(sourceId).setData(voi)
     }
-  }, [voi])
+  }, [voi, viewMode])
 
+  // Toggle VOI visibility
   useEffect(() => {
     const map = mapInstance.current
+
     if (!map) return
 
     if (map.getLayer('voi-layer')) {
       map.setLayoutProperty(
         'voi-layer',
         'visibility',
-        viewMode === 'voi' ? 'visible' : 'none'
+        viewMode === 'voi'
+          ? 'visible'
+          : 'none'
       )
     }
   }, [viewMode])
@@ -530,6 +577,18 @@ export default function MapView() {
             : 'hidden'
       }
     )
+  }, [viewMode])
+
+  // Toggle stop marker visibility
+  useEffect(() => {
+    markersRef.current.forEach(marker => {
+      const el = marker.getElement()
+
+      el.style.visibility =
+        viewMode === 'trams'
+          ? 'visible'
+          : 'hidden'
+    })
   }, [viewMode])
 
   return (

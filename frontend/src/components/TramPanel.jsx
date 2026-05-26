@@ -39,40 +39,35 @@ export default function TramPanel() {
     const id = selectedLine.replace(':', '_')
 
     const loadSchedule = () =>
-      fetchSchedule(id).then(setSchedule).catch(console.error)
+      fetchSchedule(id)
+        .then(setSchedule)
+        .catch(console.error)
 
     loadSchedule()
-    const t = setInterval(loadSchedule, 30000)
 
-    axios.get(`/api/trams/stopstats/${id}`)
+    const t = setInterval(
+      loadSchedule,
+      30000
+    )
+
+    axios
+      .get(`/api/trams/stopstats/${id}`)
       .then(r => setDayStats(r.data))
       .catch(console.error)
 
     return () => clearInterval(t)
   }, [selectedLine])
 
-  const stopSchedule =
-    selectedStop && schedule
-      ? Object.values(schedule)
-          .flatMap(
-            dir => dir.arrets || []
-          )
-          .filter(
-            s =>
-              s.stopId ===
-              selectedStop.stopId
-          )[0]
-      : null
+  // Find stop schedules for BOTH directions
+  const stopSchedules = selectedStop && schedule
+    ? Object.entries(schedule).map(([dir, d]) => {
+        const match = (d.arrets || []).find(s => s.stopName === selectedStop.stopName)
+        if (!match) return null
+        const terminus = d.arrets?.[d.arrets.length - 1]?.stopName
+        return { dir, terminus, upcoming: match.upcoming || [] }
+      }).filter(Boolean)
+    : []
 
-  {/*console.log(
-    'stopSchedule:',
-    stopSchedule,
-    'stopId:',
-    selectedStop?.stopId
-  )
-
-  console.log('upcoming:', stopSchedule?.upcoming, 'length:', stopSchedule?.upcoming?.length)
-  */}
   // Match by stop name
   const stopStats =
     selectedStop && dayStats
@@ -155,43 +150,85 @@ export default function TramPanel() {
             NEXT DEPARTURES
           </div>
 
-          {stopSchedule?.upcoming
-            ?.length > 0 ? (
-            stopSchedule.upcoming.map(
-              (u, i) => (
+          {stopSchedules.length >
+          0 ? (
+            stopSchedules.map(
+              ({
+                dir,
+                terminus,
+                upcoming
+              }) => (
                 <div
-                  key={i}
+                  key={dir}
                   style={{
-                    fontSize: 12,
-                    padding:
-                      '3px 0',
-                    display: 'flex',
-                    justifyContent:
-                      'space-between'
+                    marginBottom: 8
                   }}
                 >
-                  <span
+                  <div
                     style={{
-                      color:
-                        u.minutes_away <
-                        2
-                          ? '#4caf50'
-                          : '#ccc'
+                      fontSize: 11,
+                      color: '#aaa',
+                      marginBottom: 3
                     }}
                   >
-                    {u.minutes_away <=
-                    0
-                      ? '🚋 now'
-                      : `${u.minutes_away} min`}
-                  </span>
+                    → {terminus}
+                  </div>
 
-                  <span
-                    style={{
-                      color: '#666'
-                    }}
-                  >
-                    {fmt(u.secs)}
-                  </span>
+                  {upcoming.length >
+                  0 ? (
+                    upcoming.map(
+                      (u, i) => (
+                        <div
+                          key={i}
+                          style={{
+                            fontSize: 12,
+                            padding:
+                              '2px 0',
+                            display:
+                              'flex',
+                            justifyContent:
+                              'space-between'
+                          }}
+                        >
+                          <span
+                            style={{
+                              color:
+                                u.minutes_away <
+                                2
+                                  ? '#4caf50'
+                                  : '#ccc'
+                            }}
+                          >
+                            {u.minutes_away <=
+                            0
+                              ? '🚋 now'
+                              : `${u.minutes_away} min`}
+                          </span>
+
+                          <span
+                            style={{
+                              color:
+                                '#666'
+                            }}
+                          >
+                            {fmt(
+                              u.secs
+                            )}
+                          </span>
+                        </div>
+                      )
+                    )
+                  ) : (
+                    <div
+                      style={{
+                        fontSize: 12,
+                        color:
+                          '#666'
+                      }}
+                    >
+                      No upcoming
+                    </div>
+                  )}
                 </div>
               )
             )
@@ -202,7 +239,8 @@ export default function TramPanel() {
                 color: '#666'
               }}
             >
-              No upcoming departures
+              No upcoming
+              departures
             </div>
           )}
 

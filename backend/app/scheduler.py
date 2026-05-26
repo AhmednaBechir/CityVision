@@ -115,223 +115,105 @@ async def refresh_tram_lines():
 async def build_day_schedule():
     from .mreso import get_tram_lines
     import pytz
-    from datetime import datetime
-
-    TZ = pytz.timezone("Europe/Paris")
-
-    # Wait after startup so services/network are ready
+    from datetime import datetime, timedelta
+    import asyncio
     await asyncio.sleep(5)
+    TZ = pytz.timezone("Europe/Paris")
 
     try:
         lines = await get_tram_lines()
-
         for line in lines:
-            route_id = line["id"]
-
+            route_id = line['id']
             now = datetime.now(TZ)
-
-            start = now.replace(
-                hour=5,
-                minute=0,
-                second=0,
-                microsecond=0,
-            )
-
+            start = now.replace(hour=5, minute=0, second=0, microsecond=0)
+            end = start + timedelta(hours=21)
             t_ms = int(start.timestamp() * 1000)
+            end_ms = int(end.timestamp() * 1000)
+            step_ms = 4 * 60 * 1000  # 4 min steps
 
-            prev_ms = None
-
-            # stop_trips[stopId][dir] = set(trips)
             stop_trips = {}
-
-            # dir_key -> {terminus_name: count}
             dir_terminus_count = {}
 
-            async with httpx.AsyncClient(
-                headers={
-                    "Origin": "http://localhost:5173",
-                },
-                follow_redirects=True,
-                timeout=10,
-            ) as c:
-
-                for _ in range(80):
-                    r = await c.get(
-                        "https://data.mobilites-m.fr/api/ficheHoraires/json",
-                        params={
-                            "route": route_id,
-                            "time": t_ms,
-                        },
-                    )
-
-                    if (
-                        r.status_code != 200
-                        or not r.content
-                    ):
-                        break
-
-                    data = r.json()
+            async with httpx.AsyncClient(headers={"Origin": "http://localhost:5173"},
+                                         follow_redirects=True, timeout=10) as c:
+                while t_ms < end_ms:
+                    try:
+                        r = await c.get("https://data.mobilites-m.fr/api/ficheHoraires/json",
+                                       params={"route": route_id, "time": t_ms})
+                        if r.status_code != 200 or not r.content:
+                            break
+                        data = r.json()
+                    except Exception:
+                        t_ms += step_ms
+                        continue
 
                     for dir_key, d in data.items():
                         if not isinstance(d, dict):
                             continue
-
-                        arrets = d.get("arrets", [])
-
-                        # Track most common terminus
+                        arrets = d.get('arrets', [])
                         if arrets:
-                            t_name = arrets[-1]["stopName"]
-
+                            t_name = arrets[-1]['stopName']
                             if dir_key not in dir_terminus_count:
                                 dir_terminus_count[dir_key] = {}
-
-                            dir_terminus_count[dir_key][t_name] = (
-                                dir_terminus_count[dir_key].get(t_name, 0)
-                                + 1
-                            )
+                            dir_terminus_count[dir_key][t_name] = \
+                                dir_terminus_count[dir_key].get(t_name, 0) + 1
 
                         for stop in arrets:
-                            sid = stop["stopId"]
-
-                            if sid not in stop_trips:
-                                stop_trips[sid] = {
-                                    "stopName": stop["stopName"],
-                                    "lat": stop["lat"],
-                                    "lon": stop["lon"],
-                                    "dirs": {},
+                            sid = stop['stopId']
+                            name = stop['stopName']
+                            if name not in stop_trips:
+                                stop_trips[name] = {
+                                    'stopName': name,
+                                    'lat': stop['lat'],
+                                    'lon': stop['lon'],
+                                    'dirs': {}
                                 }
+                            if dir_key not in stop_trips[name]['dirs']:
+                                stop_trips[name]['dirs'][dir_key] = set()
+                            for t in stop.get('trips', []):
+                                try: stop_trips[name]['dirs'][dir_key].add(int(t))
+                                except: pass
 
-                            if (
-                                dir_key
-                                not in stop_trips[sid]["dirs"]
-                            ):
-                                stop_trips[sid]["dirs"][dir_key] = set()
+                    t_ms += step_ms
 
-                            for t in stop.get("trips", []):
-                                try:
-                                    stop_trips[sid]["dirs"][dir_key].add(
-                                        int(t)
-                                    )
-                                except Exception:
-                                    pass
-
-                    nt = data.get("0", {}).get("nextTime")
-
-                    if not nt or nt == prev_ms:
-                        break
-
-                    prev_ms = t_ms
-                    t_ms = nt
-
-            # Merge stops by stop name
-            name_stops = {}
-
-            for sid, info in stop_trips.items():
-                key = info["stopName"]
-
-                if key not in name_stops:
-                    name_stops[key] = {
-                        "stopName": info["stopName"],
-                        "lat": info["lat"],
-                        "lon": info["lon"],
-                        "dirs": {},
-                    }
-
-                for dir_key, trips_set in info["dirs"].items():
-                    if dir_key not in name_stops[key]["dirs"]:
-                        name_stops[key]["dirs"][dir_key] = set()
-
-                    name_stops[key]["dirs"][dir_key].update(
-                        trips_set
-                    )
-
+            # Build stats
             stats = {}
-
-            for info in name_stops.values():
+            for name, info in stop_trips.items():
                 dir_stats = {}
-
-                for dir_key, trips_set in info["dirs"].items():
+                for dir_key, trips_set in info['dirs'].items():
                     trips = sorted(trips_set)
-
                     if len(trips) < 2:
                         continue
-
-                    gaps = [
-                        trips[i + 1] - trips[i]
-                        for i in range(len(trips) - 1)
-                    ]
-
-                    normal_gaps = [
-                        g
-                        for g in gaps
-                        if g < 3600
-                    ]
-
-                    terminus_map = dir_terminus_count.get(
-                        dir_key,
-                        {"?": 1},
-                    )
-
+                    gaps = [trips[i+1]-trips[i] for i in range(len(trips)-1)]
+                    normal_gaps = [g for g in gaps if g < 3600]
                     terminus = max(
-                        terminus_map,
-                        key=terminus_map.get,
+                        dir_terminus_count.get(dir_key, {'?': 1}),
+                        key=lambda k: dir_terminus_count[dir_key][k]
                     )
-
                     dir_stats[dir_key] = {
-                        "terminus": terminus,
-                        "total_trips": len(trips),
-                        "first": trips[0],
-                        "last": trips[-1],
-                        "avg_gap_min": (
-                            round(
-                                sum(normal_gaps)
-                                / len(normal_gaps)
-                                / 60,
-                                1,
-                            )
-                            if normal_gaps
-                            else None
-                        ),
-                        "trips_per_hour": round(
-                            len([
-                                t
-                                for t in trips
-                                if 7 * 3600 <= t <= 20 * 3600
-                            ]) / 13,
-                            1,
-                        ),
+                        'terminus': terminus,
+                        'total_trips': len(trips),
+                        'first': trips[0],
+                        'last': trips[-1],
+                        'avg_gap_min': round(sum(normal_gaps)/len(normal_gaps)/60, 1) if normal_gaps else None,
+                        'trips_per_hour': round(len([t for t in trips if 7*3600 <= t <= 20*3600]) / 13, 1),
                     }
-
                 if dir_stats:
-                    stats[info["stopName"]] = {
-                        "stopName": info["stopName"],
-                        "lat": info["lat"],
-                        "lon": info["lon"],
-                        "dirs": dir_stats,
+                    stats[name] = {
+                        'stopName': name,
+                        'lat': info['lat'],
+                        'lon': info['lon'],
+                        'dirs': dir_stats
                     }
 
-            cache_key = (
-                f"trams:daystats:{route_id.replace(':', '_')}"
-            )
-
-            await cache_set(
-                cache_key,
-                stats,
-                ttl=86400,
-            )
-
-            log.info(
-                "Day stats cached for %s: %d stops",
-                route_id,
-                len(stats),
-            )
+            cache_key = f"trams:daystats:{route_id.replace(':','_')}"
+            await cache_set(cache_key, stats, ttl=86400)
+            log.info("Day stats cached for %s: %d stops", route_id, len(stats))
 
     except Exception as e:
-        log.error(
-            "build_day_schedule error: %s",
-            repr(e),
-        )
+        log.error("build_day_schedule error: %s", repr(e))
 
+        
 async def refresh_voi():
     try:
         bikes = await get_voi_free_bikes()
