@@ -27,7 +27,8 @@ export default function MapView() {
     selectedLine,
     setSelectedStop,
     viewMode,
-    voi
+    voi,
+    setSelectedVoi
   } = useStore()
 
   // Fetch selected line schedule
@@ -501,6 +502,13 @@ export default function MapView() {
         'visibility',
         viewMode === 'voi' ? 'visible' : 'none'
       )
+
+      map.on('click', 'voi-layer', (e) => {
+        const feature = e.features[0]
+      
+        const props = feature.properties
+        setSelectedVoi(props)
+      })
       
     } else {
       map.getSource(sourceId).setData(voi)

@@ -7,3 +7,4 @@ export const fetchSchedule = (lineId) => http.get(`/trams/schedule/${lineId}`).t
 export const fetchParkingLive = () => http.get('/parking/live').then(r => r.data)
 export const fetchParkingHistory = (id, hours=24) => http.get(`/parking/history/${id}?hours=${hours}`).then(r => r.data)
 export const fetchVoiLive = () => http.get('/voi/live').then(r => r.data)
+export const fetchVoiStats = () => http.get('/voi/stats').then(r => r.data)

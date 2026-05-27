@@ -337,10 +337,13 @@ async def refresh_voi():
         bikes = await get_voi_free_bikes()
 
         features = []
+        typeVoi = {"voi_bike":0,"voi_scooter":0}
 
         for b in bikes:
             if b.get("lat") is None or b.get("lon") is None:
                 continue
+
+            typeVoi[b.get("vehicle_type_id")] += 1
 
             features.append({
                 "type": "Feature",
@@ -369,6 +372,13 @@ async def refresh_voi():
             "VOI refreshed: %d vehicles",
             len(geojson["features"]),
         )
+
+        stats = {
+            "total" : sum(typeVoi.values()),
+            "types" : typeVoi
+        }
+
+        await cache_set("voi:stats", stats, ttl=120)
 
     except Exception as e:
         log.error(

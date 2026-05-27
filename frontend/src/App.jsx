@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react'
-import { fetchTramLines, fetchParkingLive, fetchVoiLive } from './api'
+import { fetchTramLines, fetchParkingLive, fetchVoiLive, fetchVoiStats } from './api'
 import { useStore } from './store'
 import MapView from './components/MapView'
 import TramPanel from './components/TramPanel'
@@ -7,7 +7,7 @@ import ParkingPanel from './components/ParkingPanel'
 import VoiPanel from './components/VoiPanel'
 
 export default function App() {
-  const { setTramLines, setParking, setSelectedLine, viewMode, setViewMode, setVoi } = useStore()
+  const { setTramLines, setParking, setSelectedLine, viewMode, setViewMode, setVoi, setVoiStats } = useStore()
 
   useEffect(() => {
     const loadLines = () => fetchTramLines()
@@ -23,8 +23,12 @@ export default function App() {
     const loadVoi = () => fetchVoiLive().then(setVoi).catch(console.error)
     loadVoi()
     const t2 = setInterval(loadVoi, 60000)
+    const loadVoiStats = () => fetchVoiStats().then(setVoiStats).catch(console.error)
+    loadVoiStats()
+    const t3 = setInterval(loadVoiStats, 60000)
     return () => {clearInterval(t)
       clearInterval(t2)
+      clearInterval(t3)
     }
   }, [])
 
