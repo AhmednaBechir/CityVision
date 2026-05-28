@@ -28,7 +28,9 @@ export default function MapView() {
     setSelectedStop,
     viewMode,
     voi,
-    setSelectedVoi
+    setSelectedVoi,
+    selectedVoi,
+    voiTypeSelected
   } = useStore()
 
   // Fetch selected line schedule
@@ -518,6 +520,26 @@ export default function MapView() {
   useEffect(() => {
     const map = mapInstance.current
     if (!map) return
+
+    if (map.getLayer('voi-layer')) {
+      const filterMap = {
+        All: null,
+        Bikes: ['==', ['get', 'type'], 'voi_bike'],
+        Scooters: ['==', ['get', 'type'], 'voi_scooter']
+      }
+
+      map.setFilter(
+        'voi-layer',
+        filterMap[voiTypeSelected]
+      )
+    }
+  },[voiTypeSelected])
+
+  useEffect(() => {
+    const map = mapInstance.current
+    if (!map) return
+
+    console.log("aaaaaaaaaaaaaaaaaaaa")
 
     if (map.getLayer('voi-layer')) {
       map.setLayoutProperty(
