@@ -6,6 +6,7 @@ follow_redirects=True to handle HTTP→HTTPS
 import httpx
 import pytz
 from datetime import datetime
+import asyncio
 
 BASE = "https://data.mobilites-m.fr/api"
 HEADERS = {"Origin": "http://localhost:5173"}
@@ -75,3 +76,34 @@ async def get_voi_free_bikes():
     r.raise_for_status()
     data = r.json()
     return data.get("data", {}).get("bikes", [])
+
+
+async def get_stoptimes(cluster_code: str):
+    """cluster_code like SEM:GENLETOILE — returns real-time delays."""
+    r = await client.get(
+        f"{BASE}/routers/default/index/clusters/{cluster_code}/stoptimes",
+        params={"showCancelledTrips": "true"}
+    )
+    if r.status_code != 200 or not r.content:
+        return []
+    return r.json()
+
+
+
+async def get_stoptimes_many(cluster_codes: list[str]) -> dict:
+    """Fetch stoptimes for multiple clusters in parallel. Returns {code: [patterns]}"""
+    async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=10) as c:
+        tasks = [
+            c.get(f"{BASE}/routers/default/index/clusters/{code}/stoptimes",
+                  params={"showCancelledTrips": "true"})
+            for code in cluster_codes
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    out = {}
+    for code, r in zip(cluster_codes, results):
+        if isinstance(r, Exception): continue
+        if r.status_code != 200 or not r.content: continue
+        try: out[code] = r.json()
+        except: pass
+    return out

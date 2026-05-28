@@ -3,9 +3,24 @@ import React, {
   useState
 } from 'react'
 
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip
+} from 'recharts'
+
 import { useStore } from '../store'
-import { fetchSchedule } from '../api'
 import axios from 'axios'
+
+import {
+  fetchSchedule,
+  fetchStoptimes,
+  fetchDelayAnalytics,
+  fetchLineDelays
+} from '../api'
 
 export default function TramPanel() {
   const {
@@ -15,6 +30,21 @@ export default function TramPanel() {
     setSelectedLine
   } = useStore()
 
+  const [schedule, setSchedule] =
+    useState(null)
+
+  const [dayStats, setDayStats] =
+    useState(null)
+
+  const [delays, setDelays] =
+    useState([])
+
+  const [lineDelays, setLineDelays] =
+    useState([])
+
+  const [lineHistory, setLineHistory] =
+    useState([])
+
   // Debug selected stop
   useEffect(() => {
     console.log(
@@ -23,11 +53,44 @@ export default function TramPanel() {
     )
   }, [selectedStop])
 
-  const [schedule, setSchedule] =
-    useState(null)
+  // Load line analytics
+  useEffect(() => {
+    fetchDelayAnalytics()
+      .then(setLineDelays)
+      .catch(console.error)
+  }, [])
 
-  const [dayStats, setDayStats] =
-    useState(null)
+  // Load line-specific delay history
+  useEffect(() => {
+    if (!selectedLine) {
+      setLineHistory([])
+      return
+    }
+
+    const id =
+      selectedLine.replace(':', '_')
+
+    fetchLineDelays(id)
+      .then(setLineHistory)
+      .catch(console.error)
+  }, [selectedLine])
+
+  // Fetch real-time delays
+  useEffect(() => {
+    if (
+      !selectedStop?.parentStation
+        ?.code
+    ) {
+      setDelays([])
+      return
+    }
+
+    fetchStoptimes(
+      selectedStop.parentStation.code
+    )
+      .then(setDelays)
+      .catch(console.error)
+  }, [selectedStop])
 
   useEffect(() => {
     if (!selectedLine) {
@@ -36,7 +99,8 @@ export default function TramPanel() {
       return
     }
 
-    const id = selectedLine.replace(':', '_')
+    const id =
+      selectedLine.replace(':', '_')
 
     const loadSchedule = () =>
       fetchSchedule(id)
@@ -51,22 +115,46 @@ export default function TramPanel() {
     )
 
     axios
-      .get(`/api/trams/stopstats/${id}`)
-      .then(r => setDayStats(r.data))
+      .get(
+        `/api/trams/stopstats/${id}`
+      )
+      .then(r =>
+        setDayStats(r.data)
+      )
       .catch(console.error)
 
     return () => clearInterval(t)
   }, [selectedLine])
 
   // Find stop schedules for BOTH directions
-  const stopSchedules = selectedStop && schedule
-    ? Object.entries(schedule).map(([dir, d]) => {
-        const match = (d.arrets || []).find(s => s.stopName === selectedStop.stopName)
-        if (!match) return null
-        const terminus = d.arrets?.[d.arrets.length - 1]?.stopName
-        return { dir, terminus, upcoming: match.upcoming || [] }
-      }).filter(Boolean)
-    : []
+  const stopSchedules =
+    selectedStop && schedule
+      ? Object.entries(schedule)
+          .map(([dir, d]) => {
+            const match = (
+              d.arrets || []
+            ).find(
+              s =>
+                s.stopName ===
+                selectedStop.stopName
+            )
+
+            if (!match) return null
+
+            const terminus =
+              d.arrets?.[
+                d.arrets.length - 1
+              ]?.stopName
+
+            return {
+              dir,
+              terminus,
+              upcoming:
+                match.upcoming || []
+            }
+          })
+          .filter(Boolean)
+      : []
 
   // Match by stop name
   const stopStats =
@@ -119,6 +207,199 @@ export default function TramPanel() {
           </span>
         ))}
       </div>
+
+      {/* Line delay overview */}
+      {lineDelays.length > 0 && (
+        <div
+          style={{
+            marginTop: 10,
+            borderTop:
+              '1px solid #2a2d3a',
+            paddingTop: 8
+          }}
+        >
+          <div
+            style={{
+              fontSize: 11,
+              color: '#8888aa',
+              marginBottom: 6
+            }}
+          >
+            LINE PERFORMANCE (24h)
+          </div>
+
+          {lineDelays.map(d => {
+            const shortName =
+              d.line_id.replace(
+                'SEM_',
+                ''
+              )
+
+            const line =
+              tramLines.find(
+                l =>
+                  l.shortName ===
+                  shortName
+              )
+
+            const color = line
+              ? '#' + line.color
+              : '#555'
+
+            const delayColor =
+              d.avg_delay_sec > 60
+                ? '#f44336'
+                : d.avg_delay_sec > 30
+                ? '#ff9800'
+                : '#4caf50'
+
+            return (
+              <div
+                key={d.line_id}
+                style={{
+                  display: 'flex',
+                  alignItems:
+                    'center',
+                  gap: 6,
+                  marginBottom: 5
+                }}
+              >
+                <span
+                  style={{
+                    background:
+                      color,
+                    color: '#fff',
+                    borderRadius: 10,
+                    padding:
+                      '2px 7px',
+                    fontSize: 11,
+                    fontWeight: 700,
+                    minWidth: 20,
+                    textAlign:
+                      'center'
+                  }}
+                >
+                  {shortName}
+                </span>
+
+                <span
+                  style={{
+                    fontSize: 12,
+                    color:
+                      delayColor,
+                    minWidth: 50
+                  }}
+                >
+                  +
+                  {Math.round(
+                    d.avg_delay_sec
+                  )}
+                  s
+                </span>
+
+                <span
+                  style={{
+                    fontSize: 11,
+                    color: '#666'
+                  }}
+                >
+                  {d.late_pct}% late
+                </span>
+
+                <span
+                  style={{
+                    fontSize: 11,
+                    color: '#444',
+                    marginLeft:
+                      'auto'
+                  }}
+                >
+                  {d.samples} trips
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Line delay history chart */}
+      {selectedLine &&
+        lineHistory.length > 1 && (
+          <div
+            style={{
+              marginTop: 8
+            }}
+          >
+            <div
+              style={{
+                fontSize: 11,
+                color: '#8888aa',
+                marginBottom: 4
+              }}
+            >
+              DELAY TREND —{' '}
+              {selectedLine.replace(
+                'SEM:',
+                'Line '
+              )}
+            </div>
+
+            <ResponsiveContainer
+              width="100%"
+              height={80}
+            >
+              <LineChart
+                data={lineHistory}
+              >
+                <XAxis
+                  dataKey="time"
+                  tickFormatter={t =>
+                    new Date(
+                      t
+                    ).getHours() + 'h'
+                  }
+                  tick={{
+                    fontSize: 9
+                  }}
+                  interval="preserveStartEnd"
+                />
+
+                <YAxis
+                  tick={{
+                    fontSize: 9
+                  }}
+                  unit="s"
+                />
+
+                <Tooltip
+                  formatter={v => [
+                    `${v}s delay`,
+                    ''
+                  ]}
+                  labelFormatter={t =>
+                    new Date(
+                      t
+                    ).toLocaleTimeString()
+                  }
+                  contentStyle={{
+                    background:
+                      '#1a1d27',
+                    border: 'none',
+                    fontSize: 11
+                  }}
+                />
+
+                <Line
+                  type="monotone"
+                  dataKey="avg_delay"
+                  stroke="#ff9800"
+                  dot={false}
+                  strokeWidth={2}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
 
       {selectedStop && (
         <div
@@ -241,6 +522,78 @@ export default function TramPanel() {
             >
               No upcoming
               departures
+            </div>
+          )}
+
+          {/* Real-time delays */}
+          {delays.length > 0 && (
+            <div
+              style={{
+                marginTop: 10,
+                borderTop:
+                  '1px solid #2a2d3a',
+                paddingTop: 8
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 11,
+                  color: '#8888aa',
+                  marginBottom: 6
+                }}
+              >
+                REAL-TIME DELAYS
+              </div>
+
+              {delays
+                .slice(0, 5)
+                .map((d, i) => {
+                  const sec =
+                    d.delay_sec
+
+                  const color = sec > 60 ? '#f44336' : sec < -30 ? '#2196f3' : sec === 0 ? '#4caf50' : '#ff9800'
+                  const label = sec === 0 ? 'on time' : sec > 0 ? `+${Math.round(sec/60)}min` : `${Math.round(sec/60)}min`
+
+                  return (
+                    <div
+                      key={i}
+                      style={{
+                        fontSize: 12,
+                        padding:
+                          '3px 0',
+                        display:
+                          'flex',
+                        justifyContent:
+                          'space-between'
+                      }}
+                    >
+                      <span
+                        style={{
+                          color:
+                            '#aaa',
+                          maxWidth: 160,
+                          overflow:
+                            'hidden',
+                          textOverflow:
+                            'ellipsis',
+                          whiteSpace:
+                            'nowrap'
+                        }}
+                      >
+                        {d.pattern}
+                      </span>
+
+                      <span
+                        style={{
+                          color,
+                          fontWeight: 600
+                        }}
+                      >
+                        {label}
+                      </span>
+                    </div>
+                  )
+                })}
             </div>
           )}
 

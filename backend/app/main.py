@@ -11,6 +11,7 @@ from .scheduler import (
     refresh_tram_lines,
     refresh_voi,
     build_day_schedule,
+    collect_delays,
 )
 from .routers import trams, parking, voi
 
@@ -20,14 +21,17 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+    # Initial cache warmup
     await refresh_parking()
     await refresh_tram_lines()
     await refresh_voi()
 
+    # Start scheduler
     start_scheduler()
 
-    # Run in background - can take ~30s
+    # Run heavy startup tasks in background
     asyncio.create_task(build_day_schedule())
+    asyncio.create_task(collect_delays())
 
     yield
 

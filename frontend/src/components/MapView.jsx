@@ -1,3 +1,4 @@
+
 import React, {
   useEffect,
   useRef,
@@ -7,16 +8,27 @@ import React, {
 import maplibregl from 'maplibre-gl'
 
 import { useStore } from '../store'
-import { fetchSchedule } from '../api'
-import { useTramAnimation } from '../hooks/UseTramAnimation'
+
+import {
+  fetchSchedule,
+  fetchRealtimeTrams
+} from '../api'
 
 export default function MapView() {
   const mapRef = useRef(null)
   const mapInstance = useRef(null)
 
-  const markersRef = useRef([]) // Tram stop markers
-  const parkingMarkersRef = useRef([]) // Parking markers
-  const tramMarkersRef = useRef([]) // Animated tram markers
+  // Stop markers
+  const markersRef = useRef([])
+
+  // Parking markers
+  const parkingMarkersRef = useRef([])
+
+  // Tram markers
+  const tramMarkersRef = useRef([])
+
+  const [tramPositions, setTramPositions] =
+    useState([])
 
   const [scheduleData, setScheduleData] =
     useState(null)
@@ -51,12 +63,29 @@ export default function MapView() {
     return () => clearInterval(t)
   }, [selectedLine])
 
-  // Animated tram positions
-  const tramPositions = useTramAnimation(
-    tramLines,
-    selectedLine,
-    scheduleData
-  )
+  // Fetch realtime tram positions
+  useEffect(() => {
+    if (!selectedLine) {
+      setTramPositions([])
+      return
+    }
+
+    const lineId = selectedLine.replace(
+      ':',
+      '_'
+    )
+
+    const load = () =>
+      fetchRealtimeTrams(lineId)
+        .then(setTramPositions)
+        .catch(console.error)
+
+    load()
+
+    const t = setInterval(load, 15000)
+
+    return () => clearInterval(t)
+  }, [selectedLine])
 
   // Highlight selected parking + center map
   useEffect(() => {
@@ -80,7 +109,6 @@ export default function MapView() {
           }
         )
 
-        // Center map on selected parking
         if (selectedParking) {
           mapInstance.current?.flyTo({
             center: [
@@ -200,7 +228,6 @@ export default function MapView() {
           })
         }
 
-        // Visibility
         if (map.getLayer(id)) {
           map.setLayoutProperty(
             id,
@@ -227,7 +254,6 @@ export default function MapView() {
 
     if (!map) return
 
-    // Clear old stop markers
     markersRef.current.forEach(m =>
       m.remove()
     )
@@ -272,10 +298,8 @@ export default function MapView() {
             };
           `
 
-          // Tag marker with stopId
           el._stopId = stop.stopId
 
-          // Stop click handler
           el.addEventListener(
             'click',
             e => {
@@ -308,18 +332,25 @@ export default function MapView() {
     viewMode
   ])
 
-  // Animated tram markers
+  // Realtime tram markers
   useEffect(() => {
     const map = mapInstance.current
 
     if (!map) return
 
-    // Clear old tram markers
     tramMarkersRef.current.forEach(m =>
       m.remove()
     )
 
     tramMarkersRef.current = []
+
+    const line = tramLines.find(
+      l => l.id === selectedLine
+    )
+
+    const color = line
+      ? '#' + line.color
+      : '#ffffff'
 
     tramPositions.forEach(pos => {
       const el =
@@ -329,7 +360,7 @@ export default function MapView() {
         width: 16px;
         height: 16px;
         border-radius: 50%;
-        background: ${pos.color};
+        background: ${color};
         border: 3px solid white;
         box-shadow: 0 0 10px rgba(0,0,0,0.8);
         z-index: 500;
@@ -340,7 +371,7 @@ export default function MapView() {
         };
       `
 
-      el.title = `${pos.stopA} → ${pos.stopB}`
+      el.title = `${pos.from_stop} → ${pos.to_stop}`
 
       const marker =
         new maplibregl.Marker({
@@ -355,7 +386,12 @@ export default function MapView() {
 
       tramMarkersRef.current.push(marker)
     })
-  }, [tramPositions, viewMode])
+  }, [
+    tramPositions,
+    selectedLine,
+    tramLines,
+    viewMode
+  ])
 
   // Draw parking markers
   useEffect(() => {
@@ -372,7 +408,6 @@ export default function MapView() {
       )
 
     const addMarkers = () => {
-      // Only update colors if same count
       if (
         parkingMarkersRef.current
           .length ===
@@ -407,7 +442,6 @@ export default function MapView() {
         return
       }
 
-      // Full redraw if parking set changed
       parkingMarkersRef.current.forEach(
         ({ marker }) =>
           marker.remove()
@@ -453,7 +487,6 @@ export default function MapView() {
           transition: all 0.2s ease;
         `
 
-        // Select parking
         el.addEventListener(
           'click',
           e => {
@@ -579,7 +612,7 @@ export default function MapView() {
     )
   }, [viewMode])
 
-  // Toggle stop marker visibility
+  // Toggle stop visibility
   useEffect(() => {
     markersRef.current.forEach(marker => {
       const el = marker.getElement()
